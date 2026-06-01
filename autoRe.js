@@ -1,17 +1,13 @@
 (function () {
     'use strict';
-    setTimeout(() => {
-        loadStorage();
-        updateCounts();
-        addLog('✅ 已就绪 ');
-    }, 2000);
-    // ========== 配置 ========== 
+
+    // ========== 配置 ==========
     const CONFIG = {
-        SCAN_INTERVAL: 5000, // 扫描间隔 5 秒 
-        INIT_DELAY: 1500, // 启动后等待列表稳定的时间 
-        COOLDOWN_MS: 6000, // 这个时间内再次出现的会话不重复回复（60秒） 
-        PARENT_CLASS: 'm-chat-sessionlist-item', // 会话条目父级类名 
-        MARKER_SELECTOR: '.bg-ysf-success', // 新消息标记的选择器 
+        SCAN_INTERVAL: 5000,
+        INIT_DELAY: 1500,
+        COOLDOWN_MS: 6000,
+        PARENT_CLASS: 'm-chat-sessionlist-item',
+        MARKER_SELECTOR: '.bg-ysf-success',
         STORAGE_KEY: 'ysf_replied_ids_v5',
         KNOWN_STORAGE_KEY: 'ysf_known_sessions_v5',
         CLICK_DELAY: 600,
@@ -20,20 +16,19 @@
         QUICK_SCAN_DELAY: 2000
     };
 
-    // ========== 全局状态 ========== 
+    // ========== 全局状态 ==========
     let running = false;
     let intervalId = null;
     let uiUpdateInterval = null;
-    let repliedIds = new Set(); // 已回复的会话ID 
-    let processingIds = new Set(); // 正在处理中的会话ID 
-    let cooldownIds = new Set(); // 冷却中的会话ID 
-    let knownSessions = new Set(); // 已知会话（启动时已存在） 
-    let replyCount = 0; // 本次已回复总数 
+    let repliedIds = new Set();
+    let processingIds = new Set();
+    let cooldownIds = new Set();
+    let knownSessions = new Set();
+    let replyCount = 0;
 
-    // ---------- 工具函数 ---------- 
+    // ---------- 工具函数 ----------
     const delay = ms => new Promise(r => setTimeout(r, ms));
 
-    // 获取会话的唯一标识符 
     function getSessionId (el) {
         let id = el.getAttribute('data-id');
         if (id && id.trim()) return 'id_' + id.trim();
@@ -41,12 +36,11 @@
         return title ? 'title_' + title : null;
     }
 
-    // 获取所有会话元素 
     function getAllSessions () {
         return Array.from(document.getElementsByClassName(CONFIG.PARENT_CLASS));
     }
 
-    // ---------- 数据持久化 ---------- 
+    // ---------- 数据持久化 ----------
     function saveReplied () {
         localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify([...repliedIds]));
     }
@@ -62,7 +56,7 @@
         } catch (e) { }
     }
 
-    // ---------- 核心：通过 querySelectorAll 获取所有标记，并找到所属会话 ---------- 
+    // ---------- 核心逻辑 ----------
     function getNewMarkedSessions () {
         const markers = document.querySelectorAll(CONFIG.MARKER_SELECTOR);
         const sessions = new Set();
@@ -81,7 +75,6 @@
         return Array.from(sessions);
     }
 
-    // 重新建立已知集合（以当前会话列表为准） 
     function rebuildKnownSet () {
         knownSessions.clear();
         const items = getAllSessions();
@@ -94,7 +87,6 @@
         updateCounts();
     }
 
-    // 将某个会话加入已知集合 
     function addToKnown (el) {
         const uid = getSessionId(el);
         if (!uid) return;
@@ -104,7 +96,6 @@
         }
     }
 
-    // 标记已回复 
     function markReplied (el) {
         const uid = getSessionId(el);
         if (!uid) return false;
@@ -132,7 +123,6 @@
         return false;
     }
 
-    // 判断是否应该回复：不在已知集合、未回复、未冷却 
     function shouldReply (el) {
         const uid = getSessionId(el);
         if (!uid) return false;
@@ -140,7 +130,6 @@
         return !knownSessions.has(uid);
     }
 
-    // ---------- 处理单个会话 ---------- 
     async function processSession (el) {
         const uid = getSessionId(el);
         if (!uid || processingIds.has(uid)) return false;
@@ -189,7 +178,6 @@
         });
     }
 
-    // ---------- 批量扫描 ---------- 
     async function performScan () {
         if (!running) return;
         const newMarkedSessions = getNewMarkedSessions();
@@ -209,7 +197,6 @@
         if (running) setTimeout(() => performScan(), CONFIG.QUICK_SCAN_DELAY);
     }
 
-    // ---------- 控制 ---------- 
     async function start () {
         if (running) return;
         running = true;
@@ -257,84 +244,61 @@
         alert('重置完成！');
     }
 
-
     // =========================================================
-    //  自动点击服务小记
+    //  自动点击服务小记核心业务
     // =========================================================
-    // 点击服务小记 
     let clickLogBtn = () => {
         const logBtn = document.querySelector("#subapp-container > div.m-kefu-chat > div.m-chat-pannel > div.m-chat-pannel-info > div.flex.items-center.min-h-\\[60px\\] > div.btn-wrap > span:nth-child(3)");
-        logBtn.click();
+        if(logBtn) logBtn.click();
     }
-    //点击文本日志按钮
+
     let clickLogTextBtn = () => {
         const logTextBtn = document.querySelector(".Tabselect > div > div > div > div > div > span > span");
-        logTextBtn.click();
+        if(logTextBtn) logTextBtn.click();
     }
-    // 一键执行：点击服务小记 - 点击文本日志
+
     let autoClick = () => {
         clickLogBtn();
         setTimeout(() => {
             clickLogTextBtn();
         }, 500);
     }
-    //点击空白处
-    function clickCoordinate(x, y) {
-    const target = document.elementFromPoint(x, y) || document.documentElement;
-    
-    const config = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-        screenX: x,
-        screenY: y
-    };
 
-    target.dispatchEvent(new MouseEvent('mousedown', config));
-    target.dispatchEvent(new MouseEvent('mouseup', config));
-    target.dispatchEvent(new MouseEvent('click', config));
-}
-    // 点击对应选项
+    function clickCoordinate(x, y) {
+        const target = document.elementFromPoint(x, y) || document.documentElement;
+        const config = {
+            bubbles: true, cancelable: true, view: window,
+            clientX: x, clientY: y, screenX: x, screenY: y
+        };
+        target.dispatchEvent(new MouseEvent('mousedown', config));
+        target.dispatchEvent(new MouseEvent('mouseup', config));
+        target.dispatchEvent(new MouseEvent('click', config));
+    }
+
     let clickTarge = async (n, m) => {
         autoClick();
         setTimeout(() => {
             const targeClass = 'Tabselect-muPopupContent-category-button';
             let els = document.querySelectorAll(`.${targeClass}>span`);
-            els[n].click();
-            setTimeout(() => {
-                els = document.querySelectorAll(`.${targeClass}>span`);
-                els[m].click();
+            if(els[n]) {
+                els[n].click();
                 setTimeout(() => {
-             clickCoordinate(50,50)
-        }, 100);
-            }, 100);
+                    els = document.querySelectorAll(`.${targeClass}>span`);
+                    if(els[m]) {
+                        els[m].click();
+                        setTimeout(() => { clickCoordinate(50,50) }, 100);
+                    }
+                }, 100);
+            }
         }, 500);
-
     }
 
-    async function handleCustomOption1 () {
-        clickTarge(3, 0);
-    }
+    async function handleCustomOption1 () { addLog('⚙️ 触发：pos 设置'); clickTarge(3, 0); }
+    async function handleCustomOption2 () { addLog('⚙️ 触发：刷卡机问题'); clickTarge(1, 14); }
+    async function handleCustomOption3 () { addLog('⚙️ 触发：打印机问题'); clickTarge(4, 2); }
+    async function handleCustomOption4 () { addLog('⚙️ 触发：其他'); clickTarge(8, 3); }
 
-
-    async function handleCustomOption2 () {
-        clickTarge(1, 14);
-    }
-
-
-    async function handleCustomOption3 () {
-        clickTarge(4, 2);
-    }
-
-    async function handleCustomOption4 () {
-        clickTarge(8, 3);
-    }
-    // =========================================================
-
-
-    // ---------- UI 更新 ---------- 
+    // ---------- UI 辅助 ----------
     function updateCounts () {
         const totalEl = document.getElementById('totalCount');
         const pendingEl = document.getElementById('pendingCount');
@@ -357,20 +321,19 @@
         console.log(msg);
     }
 
-    // ========== 构建控制面板 ========== 
+    // ========== 构建控制面板和动画样式 ==========
     const style = document.createElement('style');
-    style.textContent = ` 
-@keyframes pulse-glow { 
-    0% { box-shadow: 0 0 5px rgba(0,255,200,0.6); } 
-    50% { box-shadow: 0 0 20px rgba(0,255,200,0.9),0 0 40px rgba(0,200,255,0.4); } 
-    100% { box-shadow: 0 0 5px rgba(0,255,200,0.6); } 
-} 
-/* 🆕 新增下拉菜单选项的 Hover 变色效果 */
-.ysf-dropdown-item:hover {
-    background: rgba(0, 255, 200, 0.15) !important;
-    color: #00ffc8 !important;
-}
-`;
+    style.textContent = `
+    @keyframes pulse-glow {
+        0% { box-shadow: 0 0 5px rgba(0,255,200,0.6); }
+        50% { box-shadow: 0 0 20px rgba(0,255,200,0.9),0 0 40px rgba(0,200,255,0.4); }
+        100% { box-shadow: 0 0 5px rgba(0,255,200,0.6); }
+    }
+    .ysf-dropdown-item:hover, .ysf-right-menu-item:hover {
+        background: rgba(0, 255, 200, 0.15) !important;
+        color: #00ffc8 !important;
+    }
+    `;
     document.head.appendChild(style);
 
     const container = document.createElement('div');
@@ -379,74 +342,91 @@
 
     const floatingBtn = document.createElement('button');
     floatingBtn.id = 'floatingActionBtn';
-    floatingBtn.style.cssText = ` 
-width:52px; height:52px; border-radius:50%; border:2px solid rgba(0,255,200,0.7); background:rgba(20,30,40,0.85); backdrop-filter:blur(12px); color:#00ffc8; font-size:24px; display:flex; align-items:center; justify-content:center; cursor:pointer; pointer-events:auto; animation:pulse-glow 2.5s infinite; transition:transform 0.2s; box-shadow:0 0 15px rgba(0,255,200,0.3); 
-`;
+    floatingBtn.style.cssText = `
+    width:52px; height:52px; border-radius:50%; border:2px solid rgba(0,255,200,0.7); background:rgba(20,30,40,0.85); backdrop-filter:blur(12px); color:#00ffc8; font-size:24px; display:flex; align-items:center; justify-content:center; cursor:pointer; pointer-events:auto; animation:pulse-glow 2.5s infinite; transition:transform 0.2s; box-shadow:0 0 15px rgba(0,255,200,0.3);
+    float: right;`;
     floatingBtn.innerHTML = '⚡';
-    floatingBtn.title = '展开控制面板';
+    floatingBtn.title = '左键展开面板 | 右键快捷服务小记';
+
+    // 创建右键菜单容器
+    const rightClickMenu = document.createElement('div');
+    rightClickMenu.id = 'floatingRightMenu';
+    rightClickMenu.style.cssText = `
+    display:none; position:fixed; width:130px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.5); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10001; pointer-events:auto;
+    `;
+    rightClickMenu.innerHTML = `
+        <div style="padding:6px 12px; font-size:10px; color:#78909c; background:rgba(0,255,200,0.05); border-bottom:1px solid rgba(0,255,200,0.2); font-weight:bold;">🚀 快捷记录</div>
+        <div id="rightOpt1" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">pos 设置</div>
+        <div id="rightOpt2" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">刷卡机问题</div>
+        <div id="rightOpt3" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">打印机问题</div>
+        <div id="rightOpt4" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left;">其他</div>
+    `;
+    document.body.appendChild(rightClickMenu);
 
     const panel = document.createElement('div');
     panel.id = 'techPanel';
-    panel.style.cssText = ` 
-display:none; width:290px; background:rgba(10,20,30,0.85); backdrop-filter:blur(20px); border-radius:20px; border:1px solid rgba(0,255,200,0.25); box-shadow:0 20px 40px rgba(0,0,0,0.6),0 0 30px rgba(0,255,200,0.1); padding:18px; color:#e0f7fa; pointer-events:auto; margin-bottom:12px; transition:all 0.3s ease; 
-`;
-    panel.innerHTML = ` 
-<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;"> 
-    <span style="font-weight:700; font-size:16px; background:linear-gradient(90deg,#00ffc8,#00b4ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">◆ 七鱼·QueryAll</span> 
-    <span id="statusIndicator" style="font-size:11px; padding:2px 10px; border-radius:12px; background:rgba(255,255,255,0.1); color:#aaa;">离线</span> 
-</div> 
-<div style="display:flex; gap:8px; margin-bottom:12px;"> 
-    <div style="flex:1; background:rgba(0,255,200,0.05); border-radius:12px; padding:10px; text-align:center;"> 
-        <div style="font-size:10px; color:#78909c;">总会话</div> 
-        <div id="totalCount" style="font-size:22px; font-weight:700; color:#fff;">0</div> 
-    </div> 
-    <div style="flex:1; background:rgba(255,200,0,0.05); border-radius:12px; padding:10px; text-align:center;"> 
-        <div style="font-size:10px; color:#78909c;">待处理(NEW)</div> 
-        <div id="pendingCount" style="font-size:22px; font-weight:700; color:#ffb300;">0</div> 
-    </div> 
-    <div style="flex:1; background:rgba(0,200,255,0.05); border-radius:12px; padding:10px; text-align:center;"> 
-        <div style="font-size:10px; color:#78909c;">已回复</div> 
-        <div id="replyCount" style="font-size:22px; font-weight:700; color:#00b4ff;">0</div> 
-    </div> 
-</div> 
-<div style="margin-bottom:10px; display:flex; gap:6px; position:relative;"> 
-    <button id="startStopBtn2" style="flex:2; padding:8px 0; border:none; border-radius:20px; font-weight:600; font-size:13px; background:linear-gradient(135deg,#00b4ff,#00ffc8); color:#0a141e; cursor:pointer;">▶ 启动</button> 
-    
-    <div style="flex:1.5; position:relative;">
-        <button id="customFuncBtn" style="width:100%; padding:8px 0; border:1px solid rgba(0,255,200,0.4); border-radius:20px; font-weight:600; font-size:12px; background:rgba(0,255,200,0.1); color:#00ffc8; cursor:pointer;" title="logBtn">⚙️ 服务小记 ▾</button>
-        
-        <div id="customDropdownMenu" style="display:none; position:absolute; bottom:110%; left:0; width:130px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.4); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10000; transition:all 0.2s;">
-            <div id="dropdownOpt1" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">pos 设置</div>
-            <div id="dropdownOpt2" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">刷卡机问题</div>
-            <div id="dropdownOpt3" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left;">打印机问题</div>
-            <div id="dropdownOpt4" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left;">其他</div>
+    panel.style.cssText = `
+    display:block; width:290px; background:rgba(10,20,30,0.85); backdrop-filter:blur(20px); border-radius:20px; border:1px solid rgba(0,255,200,0.25); box-shadow:0 20px 40px rgba(0,0,0,0.6),0 0 30px rgba(0,255,200,0.1); padding:18px; color:#e0f7fa; pointer-events:auto; margin-bottom:12px; transition:all 0.3s ease;
+    opacity: 0; pointer-events:none;`;
+    panel.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <span style="font-weight:700; font-size:16px; background:linear-gradient(90deg,#00ffc8,#00b4ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">◆ 七鱼·QueryAll</span>
+        <span id="statusIndicator" style="font-size:11px; padding:2px 10px; border-radius:12px; background:rgba(255,255,255,0.1); color:#aaa;">离线</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <div style="flex:1; background:rgba(0,255,200,0.05); border-radius:12px; padding:10px; text-align:center;">
+            <div style="font-size:10px; color:#78909c;">总会话</div>
+            <div id="totalCount" style="font-size:22px; font-weight:700; color:#fff;">0</div>
+        </div>
+        <div style="flex:1; background:rgba(255,200,0,0.05); border-radius:12px; padding:10px; text-align:center;">
+            <div style="font-size:10px; color:#78909c;">待处理(NEW)</div>
+            <div id="pendingCount" style="font-size:22px; font-weight:700; color:#ffb300;">0</div>
+        </div>
+        <div style="flex:1; background:rgba(0,200,255,0.05); border-radius:12px; padding:10px; text-align:center;">
+            <div style="font-size:10px; color:#78909c;">已回复</div>
+            <div id="replyCount" style="font-size:22px; font-weight:700; color:#00b4ff;">0</div>
         </div>
     </div>
+    <div style="margin-bottom:10px; display:flex; gap:6px; position:relative;">
+        <button id="startStopBtn2" style="flex:2; padding:8px 0; border:none; border-radius:20px; font-weight:600; font-size:13px; background:linear-gradient(135deg,#00b4ff,#00ffc8); color:#0a141e; cursor:pointer;">▶ 启动</button>
 
-    <button id="resetBtn2" style="width:32px; border-radius:50%; border:1px solid rgba(255,255,255,0.2); background:transparent; color:#aaa; font-size:14px; cursor:pointer;" title="重置记录">↺</button> 
-</div> 
-<div style="margin-bottom:8px;"> 
-    <label style="font-size:10px; color:#aaa;">回复文本</label> 
-    <input id="replyMsg" value="您稍等，我来帮您看下" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.08); border:1px solid rgba(0,255,200,0.3); border-radius:10px; color:#e0f7fa; font-size:12px; margin-top:2px; box-sizing:border-box;"> 
-</div> 
-<div id="logLine" style="font-size:10px; color:#00ffc8; background:rgba(0,255,200,0.05); padding:4px 8px; border-radius:8px; min-height:16px; margin-bottom:4px;">就绪</div> 
-<div style="text-align:right; font-size:9px; color:#546e7a;">遍历所有NEW标记 | querySelectorAll</div> 
-`;
+        <div style="flex:1.5; position:relative;">
+            <button id="customFuncBtn" style="width:100%; padding:8px 0; border:1px solid rgba(0,255,200,0.4); border-radius:20px; font-weight:600; font-size:12px; background:rgba(0,255,200,0.1); color:#00ffc8; cursor:pointer;" title="logBtn">⚙️ 服务小记 ▾</button>
+
+            <div id="customDropdownMenu" style="display:none; position:absolute; bottom:110%; right:0; width:130px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.4); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10000; transition:all 0.2s;">
+                <div id="dropdownOpt1" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">pos 设置</div>
+                <div id="dropdownOpt2" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">刷卡机问题</div>
+                <div id="dropdownOpt3" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">打印机问题</div>
+                <div id="dropdownOpt4" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left;">其他</div>
+            </div>
+        </div>
+
+        <button id="resetBtn2" style="width:32px; border-radius:50%; border:1px solid rgba(255,255,255,0.2); background:transparent; color:#aaa; font-size:14px; cursor:pointer;" title="重置记录">↺</button>
+    </div>
+    <div style="margin-bottom:8px;">
+        <label style="font-size:10px; color:#aaa;">回复文本</label>
+        <input id="replyMsg" value="您稍等，我来帮您看下" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.08); border:1px solid rgba(0,255,200,0.3); border-radius:10px; color:#e0f7fa; font-size:12px; margin-top:2px; box-sizing:border-box;">
+    </div>
+    <div id="logLine" style="font-size:10px; color:#00ffc8; background:rgba(0,255,200,0.05); padding:4px 8px; border-radius:8px; min-height:16px; margin-bottom:4px;">就绪</div>
+    <div style="text-align:right; font-size:9px; color:#546e7a;">遍历所有NEW标记 | querySelectorAll</div>
+    `;
 
     container.appendChild(panel);
     container.appendChild(floatingBtn);
     document.body.appendChild(container);
 
+    // ========== 事件监听 ==========
+
     let expanded = false;
-    floatingBtn.addEventListener('click', () => {
+    floatingBtn.addEventListener('click', (e) => {
         if (expanded) {
-            panel.style.display = 'none';
-            // 面板关闭时，把下拉菜单也顺便隐藏
-            document.getElementById('customDropdownMenu').style.display = 'none';
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
             floatingBtn.innerHTML = '⚡';
             expanded = false;
         } else {
-            panel.style.display = 'block';
+            panel.style.opacity = '1';
+            panel.style.pointerEvents = 'auto';
             floatingBtn.innerHTML = '✕';
             expanded = true;
             updateCounts();
@@ -454,40 +434,62 @@ display:none; width:290px; background:rgba(10,20,30,0.85); backdrop-filter:blur(
         }
     });
 
+    // 🆕 【修改点二】：右键点击悬浮球时，让菜单精准生成在鼠标指针的“左上方”
+    floatingBtn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 核心数学偏移：鼠标横坐标减去菜单宽度(130px)，纵坐标减去菜单高度(约145px)
+        const targetLeft = e.clientX - 130 - 5;
+        const targetTop = e.clientY - 145 - 5;
+
+        rightClickMenu.style.left = `${targetLeft}px`;
+        rightClickMenu.style.top = `${targetTop}px`;
+        rightClickMenu.style.display = 'block';
+    });
+
+    document.addEventListener('click', () => {
+        const menu = document.getElementById('customDropdownMenu');
+        if (menu) menu.style.display = 'none';
+        rightClickMenu.style.display = 'none';
+    });
+
+    // 绑定右键菜单事件
+    document.getElementById('rightOpt1').addEventListener('click', async (e) => {
+        e.stopPropagation(); rightClickMenu.style.display = 'none';
+        await handleCustomOption1();
+    });
+    document.getElementById('rightOpt2').addEventListener('click', async (e) => {
+        e.stopPropagation(); rightClickMenu.style.display = 'none';
+        await handleCustomOption2();
+    });
+    document.getElementById('rightOpt3').addEventListener('click', async (e) => {
+        e.stopPropagation(); rightClickMenu.style.display = 'none';
+        await handleCustomOption3();
+    });
+    document.getElementById('rightOpt4').addEventListener('click', async (e) => {
+        e.stopPropagation(); rightClickMenu.style.display = 'none';
+        await handleCustomOption4();
+    });
+
+    // 面板控制事件
     document.getElementById('startStopBtn2').addEventListener('click', function () {
         if (running) stop();
         else start();
     });
+
     document.getElementById('resetBtn2').addEventListener('click', resetAll);
 
-
-    // 🆕 下拉菜单显示/隐藏切换控制
     document.getElementById('customFuncBtn').addEventListener('click', (e) => {
-        e.stopPropagation(); // 阻止冒泡
+        e.stopPropagation();
         const menu = document.getElementById('customDropdownMenu');
         menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
     });
 
-    // 🆕 点击页面其他空白处时自动收起菜单
-    document.addEventListener('click', () => {
-        const menu = document.getElementById('customDropdownMenu');
-        if (menu) menu.style.display = 'none';
-    });
-
-    // 🆕 绑定多选项的具体点击事件，并对应去触发顶部的预留方法
-    document.getElementById('dropdownOpt1').addEventListener('click', async () => {
-        await handleCustomOption1();
-    });
-    document.getElementById('dropdownOpt2').addEventListener('click', async () => {
-        await handleCustomOption2();
-    });
-    document.getElementById('dropdownOpt3').addEventListener('click', async () => {
-        await handleCustomOption3();
-    });
-
-    document.getElementById('dropdownOpt4').addEventListener('click', async () => {
-        await handleCustomOption4();
-    });
+    document.getElementById('dropdownOpt1').addEventListener('click', async () => { await handleCustomOption1(); });
+    document.getElementById('dropdownOpt2').addEventListener('click', async () => { await handleCustomOption2(); });
+    document.getElementById('dropdownOpt3').addEventListener('click', async () => { await handleCustomOption3(); });
+    document.getElementById('dropdownOpt4').addEventListener('click', async () => { await handleCustomOption4(); });
 
     function updateUI () {
         const btn = document.getElementById('startStopBtn2');
@@ -519,7 +521,6 @@ display:none; width:290px; background:rgba(10,20,30,0.85); backdrop-filter:blur(
         }
     }
 
-    // 初始化 
     loadStorage();
     updateCounts();
     addLog('✅ 已就绪 ');
