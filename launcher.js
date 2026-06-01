@@ -243,3 +243,4 @@ async function startLauncher() {
 }
 
 startLauncher();
+//pkg . --output 七鱼助手.exe
