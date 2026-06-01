@@ -3,19 +3,19 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 
-// 适配打包成 exe 后的路径获取
+// 适配打包成 exe 后的路径获取（支持 process.pkg）
 const currentDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 
 // ==================== 🛠️ 核心配置项 ====================
 let APP_PATH = "";              
-let SCRIPT_NAME = "autoRe.js";   
+let SCRIPT_NAME = "autoRe.js";   // 对应你本地保存的文件名
 let DEBUG_PORT = 9222;          
 
-// 🎯 请将下方链接替换为你自己的 GitHub 真实路径
-const GITHUB_RAW_URL = 'https://cdn.jsdelivr.net/gh/你的GitHub用户名/你的仓库名@main/autoRe.js';
+// 🎯 【已为你替换】：使用 jsDelivr CDN 全速加速你的 GitHub 真实脚本，防卡网死锁
+const GITHUB_RAW_URL = 'https://cdn.jsdelivr.net/gh/jonaszhang91/qiyuHelper@main/autoRe.js';
 
 console.log("===================================================");
-console.log("      网易七鱼 自动化控制面板 启动工具 (终极决战版)");
+console.log("      网易七鱼 自动化控制面板 启动工具 (正式生产版)");
 console.log("===================================================\n");
 
 function cleanPath(rawPath) {
@@ -49,7 +49,7 @@ if ($Show -eq "OK") { Write-Output $FileBrowser.FileName }
 function downloadFromGithub(url) {
     return new Promise((resolve, reject) => {
         const protocol = url.startsWith('https') ? require('https') : require('http');
-        const req = protocol.get(url, { timeout: 3000 }, (res) => {
+        const req = protocol.get(url, { timeout: 4000 }, (res) => {
             if (res.statusCode !== 200) return reject(new Error(`状态码: ${res.statusCode}`));
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -60,7 +60,6 @@ function downloadFromGithub(url) {
     });
 }
 
-// 智能进程检测
 function isQiyuRunning() {
     try {
         const stdout = execSync('tasklist /NH', { encoding: 'buffer' });
@@ -71,7 +70,6 @@ function isQiyuRunning() {
     }
 }
 
-// 🌟 强力地毯式强杀：通过名字和模糊词双重清洗，绝不留任何假死子进程
 function killQiyuProcesses() {
     try {
         execSync('taskkill /F /IM "网易七鱼.exe" /T 2>nul', { stdio: 'ignore' });
@@ -80,7 +78,6 @@ function killQiyuProcesses() {
     } catch (e) {}
 }
 
-// 嗅探调试端口是否真正开启
 function checkPortOpen(port) {
     return new Promise((resolve) => {
         const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
@@ -92,12 +89,9 @@ function checkPortOpen(port) {
     });
 }
 
-// 🌟 核心魔改拉起逻辑：改用原生 CMD 字符串直发，确保 Windows 绝对不会丢掉调试参数
 function launchQiyuRaw() {
     console.log(`🚀 [1/3] 正在开启远程调试并拉起网易七鱼主程序...`);
     const cmdStr = `start "" "${APP_PATH}" --remote-debugging-port=${DEBUG_PORT}`;
-    
-    // 用最单纯的 exec 后台托管拉起，斩断父子进程线
     exec(cmdStr, { windowsHide: false }, (err) => {
         if (err) console.error("❌ 拉起尝试失败:", err.message);
     });
@@ -106,7 +100,7 @@ function launchQiyuRaw() {
 async function startLauncher() {
     const configPath = path.join(currentDir, 'config.json');
 
-    // ----------- 1. 读取或首次生成 config.json -----------
+    // ----------- 1. 路径自适应读取 -----------
     if (!fs.existsSync(configPath)) {
         console.log('🆕 检测到首次使用，正在启动路径初始化向导...');
         const chosenPath = selectQiyuPathWindows();
@@ -136,7 +130,7 @@ async function startLauncher() {
         return;
     }
 
-    // ----------- 2. 云端下载/自检本地脚本 -----------
+    // ----------- 2. 云端高速同步 -----------
     let injectCode = "";
     const scriptPath = path.join(currentDir, SCRIPT_NAME);
     const hasLocalScript = fs.existsSync(scriptPath);
@@ -153,7 +147,7 @@ async function startLauncher() {
             console.log('等同 [保持最新] 本地核心代码与云端一致，无需下载。');
         }
     } catch (error) {
-        console.warn('⚠️  [提示] 联网失败（已转为纯本地离线保护模式）');
+        console.warn('⚠️  [提示] 联网失败或超时（已自动转为纯本地离线保护模式）');
         if (!injectCode) {
             console.error(`\n🚨 [严重错误] 首次运行必须联网下载脚本！`);
             setTimeout(() => process.exit(1), 8000);
@@ -161,7 +155,7 @@ async function startLauncher() {
         }
     }
 
-    // ----------- 3. 三态判定决策 -----------
+    // ----------- 3. 智能多态判定 -----------
     console.log('\n🔍 正在进行系统进程自检...');
     const running = isQiyuRunning();
 
@@ -173,14 +167,14 @@ async function startLauncher() {
         } else {
             console.log('♻️  [接管] 发现运行中的七鱼未开启调试通道。正在强制清空并重新接管启动...');
             killQiyuProcesses();
-            await new Promise(resolve => setTimeout(resolve, 1200)); // 留足 1.2 秒让系统彻底释放句柄
+            await new Promise(resolve => setTimeout(resolve, 1200)); 
             launchQiyuRaw();
         }
     } else {
         launchQiyuRaw();
     }
 
-    // ----------- 4. 建立 WebSocket 通道并盲发注入 -----------
+    // ----------- 4. 通道建立与盲发无感注入 -----------
     let retryCount = 0;
     
     function tryInject() {
@@ -190,7 +184,6 @@ async function startLauncher() {
             res.on('end', () => {
                 try {
                     const targets = JSON.parse(data);
-                    
                     const anyPage = targets.find(t => t.type === 'page' && (t.url.includes('qiyukf.com') || t.title.includes('会话'))) 
                                     || targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
                     
@@ -239,14 +232,14 @@ async function startLauncher() {
     function reconnect() {
         retryCount++;
         if (retryCount > 60) {
-            console.error("\n❌ [错误] 智能拉起接管超时！请检查是否有安全软件(如360/火绒)拦截了端口监听。");
+            console.error("\n❌ [错误] 智能拉起接管超时！请检查是否有安全软件拦截。");
             setTimeout(() => process.exit(1), 5000);
             return;
         }
         setTimeout(tryInject, 600); 
     }
 
-    setTimeout(tryInject, 3000); // 给新进程留足 3 秒初始化网络端口的时间
+    setTimeout(tryInject, 3000); 
 }
 
 startLauncher();
