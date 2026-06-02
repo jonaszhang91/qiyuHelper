@@ -8,14 +8,14 @@ const currentDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 
 // ==================== 🛠️ 核心配置项 ====================
 let APP_PATH = "";              
-let SCRIPT_NAME = "autoRe.js";   // 对应你本地保存的文件名
+let SCRIPT_NAME = "autoRe.js";   
 let DEBUG_PORT = 9222;          
 
-// 🎯 【已为你替换】：使用 jsDelivr CDN 全速加速你的 GitHub 真实脚本，防卡网死锁
+// 使用 jsDelivr CDN 全速加速你的 GitHub 真实脚本
 const GITHUB_RAW_URL = 'https://cdn.jsdelivr.net/gh/jonaszhang91/qiyuHelper@main/autoRe.js';
 
 console.log("===================================================");
-console.log("      网易七鱼 自动化控制面板 启动工具 (正式生产版)");
+console.log("      网易七鱼 自动化控制面板 启动工具 (终极闭环版)");
 console.log("===================================================\n");
 
 function cleanPath(rawPath) {
@@ -23,26 +23,49 @@ function cleanPath(rawPath) {
     return rawPath.toString().trim().replace(/^["']|["']$/g, '').trim();
 }
 
-function selectQiyuPathWindows() {
-    console.log('📬 正在打开文件选择窗口，请选择七鱼软件的启动程序 (.exe)...');
+// 🌟 【史诗级重构】：利用 Node.js 自身的 JSON.stringify 写入，彻底绕过 Windows 任何转义和乱码陷阱
+function selectExeAndWriteConfigSafe(configFilePath) {
+    console.log('📬 正在打开系统文件选择窗口，请直接双击选中【网易七鱼.exe】启动程序...');
+    
+    const tempPathFile = path.join(currentDir, '_temp_raw_path.txt');
+    const escapedTempPathFile = tempPathFile.replace(/\\/g, '\\\\');
+    
+    // 让 PowerShell 只做一件事：把原生路径当作纯文本写进临时文件，不进行任何危险的正则替换
     const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $FileBrowser = New-Object System.Windows.Forms.OpenFileDialog
 $FileBrowser.Filter = "应用程序 (*.exe)|*.exe"
-$FileBrowser.Title = "请选择七鱼软件的启动程序 (.exe)"
+$FileBrowser.Title = "请直接选择【网易七鱼】的启动程序 (.exe)"
+$FileBrowser.CheckFileExists = $true
 $Show = $FileBrowser.ShowDialog()
-if ($Show -eq "OK") { Write-Output $FileBrowser.FileName }
-`;
-    const tempPsFile = path.join(currentDir, '_temp_select.ps1');
+if ($Show -eq "OK") {
+    [System.IO.File]::WriteAllText("${escapedTempPathFile}", $FileBrowser.FileName, [System.Text.Encoding]::UTF8)
+}
+`.trim();
+
+    const tempPsFile = path.join(currentDir, '_temp_selector.ps1');
     try {
         fs.writeFileSync(tempPsFile, '\ufeff' + psScript, 'utf8');
-        const stdoutBuffer = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tempPsFile}"`, { encoding: 'buffer' });
+        execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tempPsFile}"`, { stdio: 'ignore' });
+        
+        // 核心安全岛：由 Node.js 亲自来接管临时文本文件并安全拼装 JSON
+        if (fs.existsSync(tempPathFile)) {
+            const rawExePath = fs.readFileSync(tempPathFile, 'utf8').trim();
+            if (rawExePath && fs.existsSync(rawExePath)) {
+                const configObject = {
+                    qiyu_path: rawExePath,
+                    script_name: SCRIPT_NAME,
+                    debug_port: DEBUG_PORT
+                };
+                // 利用 JavaScript 原生安全机制，100% 自动给反斜杠加转义
+                fs.writeFileSync(configFilePath, JSON.stringify(configObject, null, 4), 'utf8');
+            }
+            fs.unlinkSync(tempPathFile); // 清理临时路径文件
+        }
         if (fs.existsSync(tempPsFile)) fs.unlinkSync(tempPsFile);
-        let decodedString = typeof TextDecoder !== 'undefined' ? new TextDecoder('gbk').decode(stdoutBuffer) : stdoutBuffer.toString('ansi');
-        return cleanPath(decodedString); 
     } catch (e) {
-        if (fs.existsSync(tempPsFile)) fs.unlinkSync(tempPsFile);
-        return null;
+        if (fs.existsSync(tempPathFile)) try { fs.unlinkSync(tempPathFile); } catch(i){}
+        if (fs.existsSync(tempPsFile)) try { fs.unlinkSync(tempPsFile); } catch(i){}
     }
 }
 
@@ -100,32 +123,33 @@ function launchQiyuRaw() {
 async function startLauncher() {
     const configPath = path.join(currentDir, 'config.json');
 
-    // ----------- 1. 路径自适应读取 -----------
+    // ----------- 1. 路径自检与纯净读写 -----------
     if (!fs.existsSync(configPath)) {
-        console.log('🆕 检测到首次使用，正在启动路径初始化向导...');
-        const chosenPath = selectQiyuPathWindows();
-        if (!chosenPath) {
-            console.error('🚨 [错误] 未选择七鱼启动路径，程序无法继续！');
+        selectExeAndWriteConfigSafe(configPath);
+        
+        if (!fs.existsSync(configPath)) {
+            console.error('🚨 [错误] 未选定合法的网易七鱼启动程序，或生成配置文件失败！');
             setTimeout(() => process.exit(1), 5000);
             return;
         }
-        const initialConfig = { qiyu_path: chosenPath, script_name: SCRIPT_NAME, debug_port: DEBUG_PORT };
-        fs.writeFileSync(configPath, JSON.stringify(initialConfig, null, 4), 'utf8');
-        APP_PATH = chosenPath;
-    } else {
-        try {
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            APP_PATH = cleanPath(config.qiyu_path); 
-            if (config.script_name) SCRIPT_NAME = config.script_name;
-            if (config.debug_port) DEBUG_PORT = config.debug_port;
-            console.log("⚙️  [成功] 已加载外部 config.json 配置文件");
-        } catch (e) {
-            console.error("❌ [警告] 读取 config.json 格式错误");
-        }
+    }
+
+    // 此时通过 Node 生成的 json 文件绝对完美无暇
+    try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        APP_PATH = cleanPath(config.qiyu_path); 
+        if (config.script_name) SCRIPT_NAME = config.script_name;
+        if (config.debug_port) DEBUG_PORT = config.debug_port;
+        console.log("⚙️  [成功] 已加载外部 config.json 配置文件");
+    } catch (e) {
+        console.error("❌ [严重错误] 仍无法解析配置文件，正在强制格式化...");
+        try { fs.unlinkSync(configPath); } catch(i){}
+        setTimeout(() => process.exit(1), 5000);
+        return;
     }
 
     if (!APP_PATH) {
-        console.error("🚨 [错误] 七鱼启动路径为空！请删除 config.json 后重新运行！");
+        console.error("🚨 [错误] 七鱼启动路径为空！请手动删除本地 config.json 后重试！");
         setTimeout(() => process.exit(1), 5000);
         return;
     }
@@ -167,7 +191,7 @@ async function startLauncher() {
         } else {
             console.log('♻️  [接管] 发现运行中的七鱼未开启调试通道。正在强制清空并重新接管启动...');
             killQiyuProcesses();
-            await new Promise(resolve => setTimeout(resolve, 1200)); 
+            await new Promise(resolve => setTimeout(resolve, 1500)); 
             launchQiyuRaw();
         }
     } else {
@@ -232,7 +256,7 @@ async function startLauncher() {
     function reconnect() {
         retryCount++;
         if (retryCount > 60) {
-            console.error("\n❌ [错误] 智能拉起接管超时！请检查是否有安全软件拦截。");
+            console.error("\n❌ [错误] 智能拉起接管超时！请完全退出右下角托盘的七鱼后再试。");
             setTimeout(() => process.exit(1), 5000);
             return;
         }
@@ -243,4 +267,3 @@ async function startLauncher() {
 }
 
 startLauncher();
-//pkg . --output 七鱼助手.exe
