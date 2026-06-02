@@ -11,11 +11,11 @@ let APP_PATH = "";
 let SCRIPT_NAME = "autoRe.js";   
 let DEBUG_PORT = 9222;          
 
-// 使用 jsDelivr CDN 全速加速你的 GitHub 真实脚本
-const GITHUB_RAW_URL = 'https://cdn.jsdelivr.net/gh/jonaszhang91/qiyuHelper@main/autoRe.js';
+// 🎯 【高能修改】：改回 GitHub 官方直链，并动态拼接随机参数，强制干掉所有 CDN 和系统缓存
+const getLatestUrl = () => `https://raw.githubusercontent.com/jonaszhang91/qiyuHelper/main/autoRe.js?t=${Date.now()}`;
 
 console.log("===================================================");
-console.log("      网易七鱼 自动化控制面板 启动工具 (终极闭环版)");
+console.log("      网易七鱼 自动化控制面板 启动工具 (无缓存直注版)");
 console.log("===================================================\n");
 
 function cleanPath(rawPath) {
@@ -23,14 +23,11 @@ function cleanPath(rawPath) {
     return rawPath.toString().trim().replace(/^["']|["']$/g, '').trim();
 }
 
-// 🌟 【史诗级重构】：利用 Node.js 自身的 JSON.stringify 写入，彻底绕过 Windows 任何转义和乱码陷阱
 function selectExeAndWriteConfigSafe(configFilePath) {
     console.log('📬 正在打开系统文件选择窗口，请直接双击选中【网易七鱼.exe】启动程序...');
-    
     const tempPathFile = path.join(currentDir, '_temp_raw_path.txt');
     const escapedTempPathFile = tempPathFile.replace(/\\/g, '\\\\');
     
-    // 让 PowerShell 只做一件事：把原生路径当作纯文本写进临时文件，不进行任何危险的正则替换
     const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $FileBrowser = New-Object System.Windows.Forms.OpenFileDialog
@@ -48,7 +45,6 @@ if ($Show -eq "OK") {
         fs.writeFileSync(tempPsFile, '\ufeff' + psScript, 'utf8');
         execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tempPsFile}"`, { stdio: 'ignore' });
         
-        // 核心安全岛：由 Node.js 亲自来接管临时文本文件并安全拼装 JSON
         if (fs.existsSync(tempPathFile)) {
             const rawExePath = fs.readFileSync(tempPathFile, 'utf8').trim();
             if (rawExePath && fs.existsSync(rawExePath)) {
@@ -57,10 +53,9 @@ if ($Show -eq "OK") {
                     script_name: SCRIPT_NAME,
                     debug_port: DEBUG_PORT
                 };
-                // 利用 JavaScript 原生安全机制，100% 自动给反斜杠加转义
                 fs.writeFileSync(configFilePath, JSON.stringify(configObject, null, 4), 'utf8');
             }
-            fs.unlinkSync(tempPathFile); // 清理临时路径文件
+            fs.unlinkSync(tempPathFile);
         }
         if (fs.existsSync(tempPsFile)) fs.unlinkSync(tempPsFile);
     } catch (e) {
@@ -69,10 +64,14 @@ if ($Show -eq "OK") {
     }
 }
 
+// 采用官方 https 模块请求（国内直连 GitHub 如果报错，请确保开启了代理或者代理工具处于 TUN/全局 模式）
 function downloadFromGithub(url) {
     return new Promise((resolve, reject) => {
-        const protocol = url.startsWith('https') ? require('https') : require('http');
-        const req = protocol.get(url, { timeout: 4000 }, (res) => {
+        const https = require('https');
+        const req = https.get(url, { 
+            timeout: 6000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        }, (res) => {
             if (res.statusCode !== 200) return reject(new Error(`状态码: ${res.statusCode}`));
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -123,18 +122,16 @@ function launchQiyuRaw() {
 async function startLauncher() {
     const configPath = path.join(currentDir, 'config.json');
 
-    // ----------- 1. 路径自检与纯净读写 -----------
+    // ----------- 1. 路径自检 -----------
     if (!fs.existsSync(configPath)) {
         selectExeAndWriteConfigSafe(configPath);
-        
         if (!fs.existsSync(configPath)) {
-            console.error('🚨 [错误] 未选定合法的网易七鱼启动程序，或生成配置文件失败！');
+            console.error('🚨 [错误] 未选定合法的网易七鱼启动程序！');
             setTimeout(() => process.exit(1), 5000);
             return;
         }
     }
 
-    // 此时通过 Node 生成的 json 文件绝对完美无暇
     try {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         APP_PATH = cleanPath(config.qiyu_path); 
@@ -142,38 +139,33 @@ async function startLauncher() {
         if (config.debug_port) DEBUG_PORT = config.debug_port;
         console.log("⚙️  [成功] 已加载外部 config.json 配置文件");
     } catch (e) {
-        console.error("❌ [严重错误] 仍无法解析配置文件，正在强制格式化...");
+        console.error("❌ [错误] 配置文件损坏，正在重置...");
         try { fs.unlinkSync(configPath); } catch(i){}
-        setTimeout(() => process.exit(1), 5000);
+        setTimeout(() => process.exit(1), 3000);
         return;
     }
 
-    if (!APP_PATH) {
-        console.error("🚨 [错误] 七鱼启动路径为空！请手动删除本地 config.json 后重试！");
-        setTimeout(() => process.exit(1), 5000);
-        return;
-    }
-
-    // ----------- 2. 云端高速同步 -----------
+    // ----------- 🌟 2. 实时无缓存云端同步 -----------
     let injectCode = "";
     const scriptPath = path.join(currentDir, SCRIPT_NAME);
-    const hasLocalScript = fs.existsSync(scriptPath);
-    if (hasLocalScript) injectCode = fs.readFileSync(scriptPath, 'utf8');
+    
+    // 如果本地有，先读作备用
+    if (fs.existsSync(scriptPath)) injectCode = fs.readFileSync(scriptPath, 'utf8');
 
-    console.log('🌐 正在检测云端脚本是否有更新...');
+    const realTimeUrl = getLatestUrl();
+    console.log('🌐 正在绕过缓存，穿透下载 GitHub 最新实时源码...');
     try {
-        const cloudCode = await downloadFromGithub(GITHUB_RAW_URL);
-        if (cloudCode !== injectCode) {
-            console.log(hasLocalScript ? '🔄 [更新] 检测到云端代码有变动，正在同步到本地...' : '📥 [下载] 首次下载 autoRe.js 成功！');
+        const cloudCode = await downloadFromGithub(realTimeUrl);
+        if (cloudCode && cloudCode.trim().length > 0) {
+            // 只要云端能拿到，100% 强行刷入覆盖本地，不再做等同判断
             fs.writeFileSync(scriptPath, cloudCode, 'utf8');
             injectCode = cloudCode;
-        } else {
-            console.log('等同 [保持最新] 本地核心代码与云端一致，无需下载。');
+            console.log('📥 [成功] 已强行同步并覆盖本地核心代码为 GitHub 实时最新版！');
         }
     } catch (error) {
-        console.warn('⚠️  [提示] 联网失败或超时（已自动转为纯本地离线保护模式）');
+        console.warn('⚠️  [提示] 穿透联网下载受阻（已自动切为纯本地离线保护模式）');
         if (!injectCode) {
-            console.error(`\n🚨 [严重错误] 首次运行必须联网下载脚本！`);
+            console.error(`\n🚨 [严重错误] 首次运行或本地无脚本时，必须联网下载核心！`);
             setTimeout(() => process.exit(1), 8000);
             return;
         }
