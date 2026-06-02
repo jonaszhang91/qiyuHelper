@@ -16,5 +16,8 @@
   },
   "scripts": {
     "build": "pkg . -o dist/myapp && node change-icon.js"
-}
+  },
+  "devDependencies": {
+    "resedit": "^3.0.2"
+  }
 }
