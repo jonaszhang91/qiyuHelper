@@ -1,8 +1,11 @@
+
 (function () {
     'use strict';
 
     // ========== 配置 ==========
     const CONFIG = {
+        DEEPSEEK_API_KEY: 'sk-637d4c94e82845558f336105a10a42fd', // 填入你的 DeepSeek API Key
+        PROXY_URL: 'https://bold-wind-9b8a.jonaszhang91.workers.dev/', // 你的代理地址
         SCAN_INTERVAL: 5000,
         INIT_DELAY: 1500,
         COOLDOWN_MS: 6000,
@@ -56,6 +59,188 @@
         } catch (e) { }
     }
 
+    // ---------- AI 分析与聊天记录抓取 ----------
+
+    // 抓取当前对话窗口的文本记录
+    function extractVisibleChatLogs() {
+        const logs = [];
+        const msgNodes = document.querySelectorAll(
+            '.m-ct-message, .m-message-item, .u-msg, [data-test="message-item"]'
+        );
+
+        msgNodes.forEach(node => {
+            const className = node.className || '';
+            if (
+                className.includes('msg-sys') ||
+                className.includes('msg-splitLine') ||
+                className.includes('msg-cnotify') ||
+                className.includes('msg-remark') ||
+                node.querySelector('.sys-text, .m-sys-text')
+            ) {
+                return;
+            }
+
+            let role = '未知';
+            if (
+                className.includes('msg-left') ||
+                node.querySelector('.msg-left, .u-msg-left') ||
+                node.classList.contains('item-left')
+            ) {
+                role = '客户';
+            } else if (
+                className.includes('msg-right') ||
+                node.querySelector('.msg-right, .u-msg-right') ||
+                node.classList.contains('item-right')
+            ) {
+                role = '客服';
+            }
+
+            const timeEl = node.querySelector('[data-test="time"], .time, .msg-time, .u-msg-time');
+            const time = timeEl ? timeEl.innerText.trim() : '';
+
+            const textContainer = node.querySelector(
+                '[data-test="content"], .m-msg-text, .msg-text, .content, .u-msg-text, .text'
+            ) || node;
+
+            let cleanContent = textContainer.innerText || textContainer.textContent || '';
+            cleanContent = cleanContent.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+
+            if (time && cleanContent.startsWith(time)) {
+                cleanContent = cleanContent.replace(time, '').trim();
+            }
+
+            if (cleanContent && cleanContent.length > 0) {
+                const isDuplicate = logs.some(l => l.role === role && l.content === cleanContent && l.time === time);
+                if (!isDuplicate) {
+                    logs.push({ time, role, content: cleanContent });
+                }
+            }
+        });
+
+        return logs;
+    }
+
+    // 调用 API 识别服务分类
+    async function callAIForServiceLog() {
+        const logs = extractVisibleChatLogs();
+        if (logs.length === 0) {
+            addLog('⚠️ 未能读取到当前界面聊天记录');
+            return null;
+        }
+
+        const formattedTranscript = logs.map(item => `[${item.time || '未知'}] ${item.role}: ${item.content}`).join('\n');
+
+const systemPrompt = `你是一名专业的点餐系统客服分类助手。请根据聊天内容，从以下预定义的分类列表中选出最匹配的一项，并严格返回一个 JSON 对象，不要包含 markdown 或任何多余文本。
+
+【分类与编号对应列表】：
+- POS设置: "3,0"
+- Paypad/Tripos: "3,1"
+- Kiosk/Emenu: "3,2"
+- Online Order: "3,3"
+- 报表/手机报表: "3,4"
+- 刷卡机: "3,5"
+- 打印机: "3,6"
+- Caller ID: "3,7"
+- 磅秤: "3,8"
+- 其他硬件: "3,9"
+- Ubuntu/Windows: "3,10"
+- 软件升级: "3,11"
+- 网络连接: "3,12"
+- 需求: "3,13"
+- Bug: "3,14"
+- 批量问题: "3,15"
+- RMA: "3,16"
+- license相关: "3,17"
+- Batch相关: "3,18"
+- 预约时间: "3,19"
+- 其他: "6,4"
+
+【返回 JSON 格式要求】：
+{
+  "type": "分类名称",
+  "code": "编号",
+  "sub": "总结一下 10 个字以内"
+}`;
+
+        try {
+            const response = await fetch(CONFIG.PROXY_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${CONFIG.DEEPSEEK_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'deepseek-chat',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: `以下是聊天记录：\n\n${formattedTranscript}` }
+                    ],
+                    response_format: { type: 'json_object' },
+                    temperature: 0.1
+                })
+            });
+
+            if (response.ok) {
+                const resData = await response.json();
+                const jsonContent = JSON.parse(resData.choices[0].message.content);
+                return jsonContent;
+            } else {
+                addLog(`❌ AI 请求失败: ${response.status}`);
+            }
+        } catch (err) {
+            console.error(err);
+            addLog('❌ AI 请求异常');
+        }
+        return null;
+    }
+// Vue/React 兼容的输入框底层赋值函数
+    function setInputValue(element, value) {
+        if (!element) return;
+        const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
+        const prototype = Object.getPrototypeOf(element);
+        const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+        if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+            prototypeValueSetter.call(element, value);
+        } else if (valueSetter) {
+            valueSetter.call(element, value);
+        } else {
+            element.value = value;
+        }
+
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+
+    // AI 主处理逻辑
+    async function handleAIServiceLogTrigger() {
+        addLog('🤖 AI 正在分析对话...');
+        const result = await callAIForServiceLog();
+
+        if (result && result.code) {
+            const [n, m] = result.code.split(',').map(Number);
+            addLog(`⚙️ AI 匹配类型: [${result.type}] -> clickTarge(${n}, ${m})`);
+
+            // 1. 执行分类点击选择
+            await clickTarge(n, m);
+
+            // 2. 延迟等待弹窗和 DOM 渲染完成后，将 sub 写入 textarea
+            setTimeout(() => {
+                const textarea = document.querySelector('textarea#description');
+                if (textarea) {
+                    const textToFill = result.sub || result.type || '';
+                    textarea.focus();
+                    setInputValue(textarea, textToFill);
+                    addLog(`📝 已填入小结 (sub): "${textToFill}"`);
+                } else {
+                    addLog('⚠️ 未找到 #description 文本框');
+                }
+            }, 800);
+        } else {
+            addLog('⚠️ AI 未能提取到正确的分类 code');
+        }
+    }
     // ---------- 核心逻辑 ----------
     function getNewMarkedSessions () {
         const markers = document.querySelectorAll(CONFIG.MARKER_SELECTOR);
@@ -286,17 +471,17 @@
                     els = document.querySelectorAll(`.${targeClass}>span`);
                     if(els[m]) {
                         els[m].click();
-                        setTimeout(() => { clickCoordinate(50,50) }, 100);
+                        setTimeout(() => { clickCoordinate(50,50) }, 200);
                     }
-                }, 100);
+                }, 200);
             }
         }, 500);
     }
 
     async function handleCustomOption1 () { addLog('⚙️ 触发：pos 设置'); clickTarge(3, 0); }
-    async function handleCustomOption2 () { addLog('⚙️ 触发：刷卡机问题'); clickTarge(1, 14); }
-    async function handleCustomOption3 () { addLog('⚙️ 触发：打印机问题'); clickTarge(4, 2); }
-    async function handleCustomOption4 () { addLog('⚙️ 触发：其他'); clickTarge(8, 3); }
+    async function handleCustomOption2 () { addLog('⚙️ 触发：刷卡机问题'); clickTarge(3, 5); }
+    async function handleCustomOption3 () { addLog('⚙️ 触发：打印机问题'); clickTarge(3, 6); }
+    async function handleCustomOption4 () { addLog('⚙️ 触发：其他'); clickTarge(6, 4); }
 
     // ---------- UI 辅助 ----------
     function updateCounts () {
@@ -352,10 +537,11 @@
     const rightClickMenu = document.createElement('div');
     rightClickMenu.id = 'floatingRightMenu';
     rightClickMenu.style.cssText = `
-    display:none; position:fixed; width:130px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.5); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10001; pointer-events:auto;
+    display:none; position:fixed; width:150px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.5); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10001; pointer-events:auto;
     `;
     rightClickMenu.innerHTML = `
         <div style="padding:6px 12px; font-size:10px; color:#78909c; background:rgba(0,255,200,0.05); border-bottom:1px solid rgba(0,255,200,0.2); font-weight:bold;">🚀 快捷记录</div>
+        <div id="rightOptAI" class="ysf-right-menu-item" style="padding:8px 12px; color:#00ffc8; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:bold;">🤖 AI 智能分析分类</div>
         <div id="rightOpt1" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">pos 设置</div>
         <div id="rightOpt2" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">刷卡机问题</div>
         <div id="rightOpt3" class="ysf-right-menu-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">打印机问题</div>
@@ -394,6 +580,7 @@
             <button id="customFuncBtn" style="width:100%; padding:8px 0; border:1px solid rgba(0,255,200,0.4); border-radius:20px; font-weight:600; font-size:12px; background:rgba(0,255,200,0.1); color:#00ffc8; cursor:pointer;" title="logBtn">⚙️ 服务小记 ▾</button>
 
             <div id="customDropdownMenu" style="display:none; position:absolute; bottom:110%; right:0; width:130px; background:rgba(15,25,35,0.95); backdrop-filter:blur(10px); border:1px solid rgba(0,255,200,0.4); border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5); overflow:hidden; z-index:10000; transition:all 0.2s;">
+                <div id="dropdownOptAI" class="ysf-dropdown-item" style="padding:8px 12px; color:#00ffc8; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:bold;">🤖 AI 智能分析</div>
                 <div id="dropdownOpt1" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">pos 设置</div>
                 <div id="dropdownOpt2" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">刷卡机问题</div>
                 <div id="dropdownOpt3" class="ysf-dropdown-item" style="padding:8px 12px; color:#e0f7fa; font-size:12px; cursor:pointer; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05);">打印机问题</div>
@@ -434,14 +621,12 @@
         }
     });
 
-    // 🆕 【修改点二】：右键点击悬浮球时，让菜单精准生成在鼠标指针的“左上方”
     floatingBtn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
 
-        // 核心数学偏移：鼠标横坐标减去菜单宽度(130px)，纵坐标减去菜单高度(约145px)
-        const targetLeft = e.clientX - 130 - 5;
-        const targetTop = e.clientY - 145 - 5;
+        const targetLeft = e.clientX - 150 - 5;
+        const targetTop = e.clientY - 165 - 5;
 
         rightClickMenu.style.left = `${targetLeft}px`;
         rightClickMenu.style.top = `${targetTop}px`;
@@ -455,6 +640,10 @@
     });
 
     // 绑定右键菜单事件
+    document.getElementById('rightOptAI').addEventListener('click', async (e) => {
+        e.stopPropagation(); rightClickMenu.style.display = 'none';
+        await handleAIServiceLogTrigger();
+    });
     document.getElementById('rightOpt1').addEventListener('click', async (e) => {
         e.stopPropagation(); rightClickMenu.style.display = 'none';
         await handleCustomOption1();
@@ -486,6 +675,7 @@
         menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
     });
 
+    document.getElementById('dropdownOptAI').addEventListener('click', async () => { await handleAIServiceLogTrigger(); });
     document.getElementById('dropdownOpt1').addEventListener('click', async () => { await handleCustomOption1(); });
     document.getElementById('dropdownOpt2').addEventListener('click', async () => { await handleCustomOption2(); });
     document.getElementById('dropdownOpt3').addEventListener('click', async () => { await handleCustomOption3(); });
