@@ -1,3 +1,13 @@
+// ==UserScript==
+// @name         autoResForSevenFish
+// @namespace    http://tampermonkey.net/
+// @version      2026-05-31
+// @description  七鱼自动回复 + 悬浮球右键服务小记菜单（左上方弹出版）
+// @author       jonas
+// @match        https://mjhlwkjnjyxgs.qiyukf.com/chat/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=qiyukf.com
+// @grant        none
+// ==/UserScript==
 
 (function () {
     'use strict';
@@ -131,7 +141,7 @@
         const formattedTranscript = logs.map(item => `[${item.time || '未知'}] ${item.role}: ${item.content}`).join('\n');
 
 const systemPrompt = `你是一名专业的点餐系统客服分类助手。请根据聊天内容，从以下预定义的分类列表中选出最匹配的一项，并严格返回一个 JSON 对象，不要包含 markdown 或任何多余文本。
-
+会话中 技术支持是我们处理
 【分类与编号对应列表】：
 - POS设置: "3,0"
 - Paypad/Tripos: "3,1"
@@ -154,12 +164,12 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
 - Batch相关: "3,18"
 - 预约时间: "3,19"
 - 其他: "6,4"
-
+修改内容不要算需求算设置，只有会话中明确提到反馈研发的才算需求和 bug 不然都选择对应的问题
 【返回 JSON 格式要求】：
 {
   "type": "分类名称",
   "code": "编号",
-  "sub": "总结一下 10 个字以内"
+  "sub": "总结一下 10 个字以内，主要以技术支持最后处理一个问题的内容为主，只总结最近的一段对话里面的技术问题"
 }`;
 
         try {
@@ -471,9 +481,9 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
                     els = document.querySelectorAll(`.${targeClass}>span`);
                     if(els[m]) {
                         els[m].click();
-                        setTimeout(() => { clickCoordinate(50,50) }, 200);
+                        setTimeout(() => { clickCoordinate(50,50) }, 300);
                     }
-                }, 200);
+                }, 300);
             }
         }, 500);
     }
