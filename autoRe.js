@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         autoResForSevenFish
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-31
-// @description  七鱼自动回复 + 悬浮球右键服务小记菜单（左上方弹出版）
+// @version      2026-09-23
+// @description  七鱼自动回复 + 悬浮球右键服务小记菜单（动态等待 + 双版本 DOM 兼容版）
 // @author       jonas
 // @match        https://mjhlwkjnjyxgs.qiyukf.com/chat/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=qiyukf.com
@@ -42,25 +42,59 @@
     // ---------- 工具函数 ----------
     const delay = ms => new Promise(r => setTimeout(r, ms));
 
-    function getSessionId (el) {
+    // 动态等待元素出现
+    function waitForElement(selector, timeout = 5000) {
+        return new Promise(resolve => {
+            const start = Date.now();
+            const check = setInterval(() => {
+                const el = document.querySelector(selector);
+                if (el) {
+                    clearInterval(check);
+                    resolve(el);
+                } else if (Date.now() - start > timeout) {
+                    clearInterval(check);
+                    resolve(null);
+                }
+            }, 100);
+        });
+    }
+
+    // 动态等待条件成立（用于等待多级菜单 DOM 更新）
+    function waitForCondition(predicate, timeout = 5000) {
+        return new Promise(resolve => {
+            const start = Date.now();
+            const check = setInterval(() => {
+                const res = predicate();
+                if (res) {
+                    clearInterval(check);
+                    resolve(res);
+                } else if (Date.now() - start > timeout) {
+                    clearInterval(check);
+                    resolve(null);
+                }
+            }, 100);
+        });
+    }
+
+    function getSessionId(el) {
         let id = el.getAttribute('data-id');
         if (id && id.trim()) return 'id_' + id.trim();
         const title = el.querySelector('.truncate')?.innerText?.trim();
         return title ? 'title_' + title : null;
     }
 
-    function getAllSessions () {
+    function getAllSessions() {
         return Array.from(document.getElementsByClassName(CONFIG.PARENT_CLASS));
     }
 
     // ---------- 数据持久化 ----------
-    function saveReplied () {
+    function saveReplied() {
         localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify([...repliedIds]));
     }
-    function saveKnown () {
+    function saveKnown() {
         localStorage.setItem(CONFIG.KNOWN_STORAGE_KEY, JSON.stringify([...knownSessions]));
     }
-    function loadStorage () {
+    function loadStorage() {
         try {
             const rep = localStorage.getItem(CONFIG.STORAGE_KEY);
             if (rep) repliedIds = new Set(JSON.parse(rep));
@@ -71,11 +105,10 @@
 
     // ---------- AI 分析与聊天记录抓取 ----------
 
-    // 抓取当前对话窗口的文本记录
     function extractVisibleChatLogs() {
         const logs = [];
         const msgNodes = document.querySelectorAll(
-            '.m-ct-message, .m-message-item, .u-msg, [data-test="message-item"]'
+            '.m-ct-message, .m-message-item, .u-msg, [data-test="message-item"], .msg'
         );
 
         msgNodes.forEach(node => {
@@ -85,6 +118,9 @@
                 className.includes('msg-splitLine') ||
                 className.includes('msg-cnotify') ||
                 className.includes('msg-remark') ||
+                className.includes('msg-transkefu') ||
+                className.includes('msg-sessionId') ||
+                className.includes('msg-receiptkefuinfo') ||
                 node.querySelector('.sys-text, .m-sys-text')
             ) {
                 return;
@@ -109,7 +145,7 @@
             const time = timeEl ? timeEl.innerText.trim() : '';
 
             const textContainer = node.querySelector(
-                '[data-test="content"], .m-msg-text, .msg-text, .content, .u-msg-text, .text'
+                '[data-test="content"], .msg-text-content, .m-msg-text, .msg-text, .content, .u-msg-text, .text'
             ) || node;
 
             let cleanContent = textContainer.innerText || textContainer.textContent || '';
@@ -130,7 +166,6 @@
         return logs;
     }
 
-    // 调用 API 识别服务分类
     async function callAIForServiceLog() {
         const logs = extractVisibleChatLogs();
         if (logs.length === 0) {
@@ -140,7 +175,7 @@
 
         const formattedTranscript = logs.map(item => `[${item.time || '未知'}] ${item.role}: ${item.content}`).join('\n');
 
-const systemPrompt = `你是一名专业的点餐系统客服分类助手。请根据聊天内容，从以下预定义的分类列表中选出最匹配的一项，并严格返回一个 JSON 对象，不要包含 markdown 或任何多余文本。
+        const systemPrompt = `你是一名专业的点餐系统客服分类助手。请根据聊天内容，从以下预定义的分类列表中选出最匹配的一项，并严格返回一个 JSON 对象，不要包含 markdown 或任何多余文本。
 会话中 技术支持是我们处理
 【分类与编号对应列表】：
 - POS设置: "3,0"
@@ -203,7 +238,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         }
         return null;
     }
-// Vue/React 兼容的输入框底层赋值函数
+
     function setInputValue(element, value) {
         if (!element) return;
         const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
@@ -223,7 +258,6 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         element.dispatchEvent(new Event('blur', { bubbles: true }));
     }
 
-    // AI 主处理逻辑
     async function handleAIServiceLogTrigger() {
         addLog('🤖 AI 正在分析对话...');
         const result = await callAIForServiceLog();
@@ -232,27 +266,26 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
             const [n, m] = result.code.split(',').map(Number);
             addLog(`⚙️ AI 匹配类型: [${result.type}] -> clickTarge(${n}, ${m})`);
 
-            // 1. 执行分类点击选择
-            await clickTarge(n, m);
+            const success = await clickTarge(n, m);
+            if (!success) return;
 
-            // 2. 延迟等待弹窗和 DOM 渲染完成后，将 sub 写入 textarea
-            setTimeout(() => {
-                const textarea = document.querySelector('textarea#description');
-                if (textarea) {
-                    const textToFill = result.sub || result.type || '';
-                    textarea.focus();
-                    setInputValue(textarea, textToFill);
-                    addLog(`📝 已填入小结 (sub): "${textToFill}"`);
-                } else {
-                    addLog('⚠️ 未找到 #description 文本框');
-                }
-            }, 800);
+            // 动态等待 #description 文本框出现，兼容新旧 DOM 写入
+            const textarea = await waitForElement('textarea#description', 5000);
+            if (textarea) {
+                const textToFill = result.sub || result.type || '';
+                textarea.focus();
+                setInputValue(textarea, textToFill);
+                addLog(`📝 已填入备注 (sub): "${textToFill}"`);
+            } else {
+                addLog('⚠️ 未能找到 #description 文本框（等待超时）');
+            }
         } else {
             addLog('⚠️ AI 未能提取到正确的分类 code');
         }
     }
+
     // ---------- 核心逻辑 ----------
-    function getNewMarkedSessions () {
+    function getNewMarkedSessions() {
         const markers = document.querySelectorAll(CONFIG.MARKER_SELECTOR);
         const sessions = new Set();
         for (const marker of markers) {
@@ -270,7 +303,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         return Array.from(sessions);
     }
 
-    function rebuildKnownSet () {
+    function rebuildKnownSet() {
         knownSessions.clear();
         const items = getAllSessions();
         for (const el of items) {
@@ -282,7 +315,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         updateCounts();
     }
 
-    function addToKnown (el) {
+    function addToKnown(el) {
         const uid = getSessionId(el);
         if (!uid) return;
         if (!knownSessions.has(uid)) {
@@ -291,7 +324,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         }
     }
 
-    function markReplied (el) {
+    function markReplied(el) {
         const uid = getSessionId(el);
         if (!uid) return false;
         el.setAttribute('data-ysf-replied', 'true');
@@ -309,7 +342,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         return true;
     }
 
-    function isReplied (el) {
+    function isReplied(el) {
         const uid = getSessionId(el);
         if (!uid) return false;
         if (el.getAttribute('data-ysf-replied') === 'true') return true;
@@ -318,14 +351,14 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         return false;
     }
 
-    function shouldReply (el) {
+    function shouldReply(el) {
         const uid = getSessionId(el);
         if (!uid) return false;
         if (isReplied(el)) return false;
         return !knownSessions.has(uid);
     }
 
-    async function processSession (el) {
+    async function processSession(el) {
         const uid = getSessionId(el);
         if (!uid || processingIds.has(uid)) return false;
         processingIds.add(uid);
@@ -357,23 +390,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         return true;
     }
 
-    function waitForElement (selector, timeout = 5000) {
-        return new Promise(resolve => {
-            const start = Date.now();
-            const check = setInterval(() => {
-                const el = document.querySelector(selector);
-                if (el) {
-                    clearInterval(check);
-                    resolve(el);
-                } else if (Date.now() - start > timeout) {
-                    clearInterval(check);
-                    resolve(null);
-                }
-            }, 200);
-        });
-    }
-
-    async function performScan () {
+    async function performScan() {
         if (!running) return;
         const newMarkedSessions = getNewMarkedSessions();
         const targets = newMarkedSessions.filter(el => shouldReply(el));
@@ -392,7 +409,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         if (running) setTimeout(() => performScan(), CONFIG.QUICK_SCAN_DELAY);
     }
 
-    async function start () {
+    async function start() {
         if (running) return;
         running = true;
         addLog('⏳ 正在初始化已知会话列表...');
@@ -409,7 +426,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         updateUI();
     }
 
-    function stop () {
+    function stop() {
         running = false;
         if (intervalId) {
             clearInterval(intervalId);
@@ -423,7 +440,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         updateUI();
     }
 
-    function resetAll () {
+    function resetAll() {
         localStorage.removeItem(CONFIG.STORAGE_KEY);
         localStorage.removeItem(CONFIG.KNOWN_STORAGE_KEY);
         repliedIds.clear();
@@ -440,24 +457,61 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
     }
 
     // =========================================================
-    //  自动点击服务小记核心业务
+    //  自动点击服务小记（新旧版 DOM 兼容 + 降级兜底算法）
     // =========================================================
-    let clickLogBtn = () => {
-        const logBtn = document.querySelector("#subapp-container > div.m-kefu-chat > div.m-chat-pannel > div.m-chat-pannel-info > div.flex.items-center.min-h-\\[60px\\] > div.btn-wrap > span:nth-child(3)");
-        if(logBtn) logBtn.click();
-    }
 
-    let clickLogTextBtn = () => {
-        const logTextBtn = document.querySelector(".Tabselect > div > div > div > div > div > span > span");
-        if(logTextBtn) logTextBtn.click();
-    }
+    // 1. 寻找并确保“服务小记”面板处于可见状态
+    let clickLogBtn = async () => {
+        // [新版 DOM] 检查右侧抽屉/卡片中是否已包含服务小记区域
+        const newServiceNotePanel = document.querySelector('.m-websession-userInfo-serviceNote, .card-content');
+        if (newServiceNotePanel) {
+            addLog('✅ 检测到侧边栏【服务小记】面板');
+            return true;
+        }
 
-    let autoClick = () => {
-        clickLogBtn();
-        setTimeout(() => {
-            clickLogTextBtn();
-        }, 500);
-    }
+        // [旧版 DOM] 点击顶部的“服务小记”顶部 Tab 入口
+        const oldLogBtnSelector = "#subapp-container > div.m-kefu-chat > div.m-chat-pannel > div.m-chat-pannel-info > div.flex.items-center.min-h-\\[60px\\] > div.btn-wrap > span:nth-child(3)";
+        const logBtn = await waitForElement(oldLogBtnSelector, 2000);
+        if (logBtn) {
+            logBtn.click();
+            return true;
+        }
+
+        addLog('⚠️ 未能找到“服务小记”面板入口');
+        return false;
+    };
+
+    // 2. 点击展开“咨询分类”下拉框
+    let clickLogTextBtn = async () => {
+        // [新版 AntDesign DOM] 匹配卡片模式下的【咨询分类】下拉选择框
+        const newTabSelector = ".m-websession-userInfo-serviceNote .Tabselect .ant-select-selector, div[id^='categoryTabSelect_'] .ant-select-selector, .Tabselect .ant-select-selector";
+        const newSelect = document.querySelector(newTabSelector);
+        if (newSelect) {
+            newSelect.click();
+            addLog('✅ 点击【咨询分类】下拉框');
+            return true;
+        }
+
+        // [旧版 DOM] 匹配老版的分类标签按钮
+        const oldTextBtnSelector = ".Tabselect > div > div > div > div > div > span > span";
+        const oldLogTextBtn = await waitForElement(oldTextBtnSelector, 2000);
+        if (oldLogTextBtn) {
+            oldLogTextBtn.click();
+            return true;
+        }
+
+        addLog('⚠️ 未能找到服务小记分类选择入口');
+        return false;
+    };
+
+    // 组合入口触发
+    let autoClick = async () => {
+        const step1 = await clickLogBtn();
+        if (!step1) return false;
+        await delay(200);
+        const step2 = await clickLogTextBtn();
+        return step2;
+    };
 
     function clickCoordinate(x, y) {
         const target = document.elementFromPoint(x, y) || document.documentElement;
@@ -470,31 +524,98 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         target.dispatchEvent(new MouseEvent('click', config));
     }
 
+    // 3. 兼容双版本 DOM + 降级容错点击机制
     let clickTarge = async (n, m) => {
-        autoClick();
-        setTimeout(() => {
-            const targeClass = 'Tabselect-muPopupContent-category-button';
-            let els = document.querySelectorAll(`.${targeClass}>span`);
-            if(els[n]) {
-                els[n].click();
-                setTimeout(() => {
-                    els = document.querySelectorAll(`.${targeClass}>span`);
-                    if(els[m]) {
-                        els[m].click();
-                        setTimeout(() => { clickCoordinate(50,50) }, 300);
-                    }
-                }, 300);
-            }
-        }, 500);
-    }
+        const ready = await autoClick();
+        if (!ready) return false;
 
-    async function handleCustomOption1 () { addLog('⚙️ 触发：pos 设置'); clickTarge(3, 0); }
-    async function handleCustomOption2 () { addLog('⚙️ 触发：刷卡机问题'); clickTarge(3, 5); }
-    async function handleCustomOption3 () { addLog('⚙️ 触发：打印机问题'); clickTarge(3, 6); }
-    async function handleCustomOption4 () { addLog('⚙️ 触发：其他'); clickTarge(6, 4); }
+        await delay(300); // 留出下拉菜单展开过渡动画
+
+        const targeClass = 'Tabselect-muPopupContent-category-button';
+
+        // === 一级分类搜寻 ===
+        let firstEls = await waitForCondition(() => {
+            // 方式 A: 传统 Class
+            let els = document.querySelectorAll(`.${targeClass}>span`);
+            if (els && els.length > n) return els;
+
+            // 方式 B: AntDesign 展开的下拉 Popup 列表项
+            const antOptions = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item, .ant-select-item-option-content, .ant-cascader-menu-item');
+            if (antOptions && antOptions.length > n) return antOptions;
+
+            return null;
+        }, 2000);
+
+        // 一级分类降级策略
+        if (!firstEls) {
+            const popupContainer = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden), .Tabselect-muPopupContent, .Tabselect');
+            if (popupContainer) {
+                const fallbackEls = popupContainer.querySelectorAll('.ant-select-item, span, button, div[role="option"]');
+                if (fallbackEls && fallbackEls.length > n) {
+                    firstEls = fallbackEls;
+                    addLog(`⚠️ 一级分类启动降级检索`);
+                }
+            }
+        }
+
+        if (!firstEls || !firstEls[n]) {
+            addLog(`❌ 未能找到第 ${n} 个一级分类`);
+            return false;
+        }
+
+        firstEls[n].click();
+        await delay(300);
+
+        // === 二级分类搜寻 ===
+        let secondEls = await waitForCondition(() => {
+            // 方式 A: 传统 Class
+            let els = document.querySelectorAll(`.${targeClass}>span`);
+            if (els && els.length > m) return els;
+
+            // 方式 B: 新版 AntDesign 展开的二级菜单
+            const antOptions = document.querySelectorAll('.ant-cascader-menu:nth-child(2) .ant-cascader-menu-item, .ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item');
+            if (antOptions && antOptions.length > m) return antOptions;
+
+            return null;
+        }, 2000);
+
+        // 二级分类降级兜底（用于修复/服务手机界面无预估 Class 渲染时）
+        if (!secondEls) {
+            addLog(`⚠️ 启动二级选项全域盲点点击...`);
+            const activeMenu = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden), .Tabselect-muPopupContent');
+            if (activeMenu) {
+                const validNodes = Array.from(activeMenu.querySelectorAll('.ant-select-item, span, li, div')).filter(el => el.innerText && el.innerText.trim().length > 0);
+                if (validNodes.length > m) secondEls = validNodes;
+            }
+        }
+
+        if (secondEls && secondEls[m]) {
+            secondEls[m].click();
+            addLog(`✅ 成功选择第 ${m} 项二级分类`);
+        } else {
+            // 最终兜底强行尝试
+            const fallbackOption = document.querySelectorAll('.ant-select-dropdown .ant-select-item')[m];
+            if (fallbackOption) {
+                fallbackOption.click();
+                addLog(`⚡ 已执行最终兜底强行点击`);
+            } else {
+                addLog(`❌ 二级分类 ${m} 点击失败`);
+                return false;
+            }
+        }
+
+        await delay(200);
+        clickCoordinate(50, 50); // 收起遮罩
+        return true;
+    };
+
+    async function handleCustomOption1() { addLog('⚙️ 触发：pos 设置'); await clickTarge(3, 0); }
+    async function handleCustomOption2() { addLog('⚙️ 触发：刷卡机问题'); await clickTarge(3, 5); }
+    async function handleCustomOption3() { addLog('⚙️ 触发：打印机问题'); await clickTarge(3, 6); }
+    async function handleCustomOption4() { addLog('⚙️ 触发：其他'); await clickTarge(6, 4); }
 
     // ---------- UI 辅助 ----------
-    function updateCounts () {
+    function updateCounts() {
         const totalEl = document.getElementById('totalCount');
         const pendingEl = document.getElementById('pendingCount');
         const repliedEl = document.getElementById('replyCount');
@@ -509,14 +630,14 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
     }
 
     let lastLog = '就绪';
-    function addLog (msg) {
+    function addLog(msg) {
         lastLog = msg;
         const logEl = document.getElementById('logLine');
         if (logEl) logEl.innerText = msg;
         console.log(msg);
     }
 
-    // ========== 构建控制面板和动画样式 ==========
+    // ========== 构建控制面板与悬浮UI ==========
     const style = document.createElement('style');
     style.textContent = `
     @keyframes pulse-glow {
@@ -649,7 +770,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         rightClickMenu.style.display = 'none';
     });
 
-    // 绑定右键菜单事件
+    // 右键快捷菜单逻辑
     document.getElementById('rightOptAI').addEventListener('click', async (e) => {
         e.stopPropagation(); rightClickMenu.style.display = 'none';
         await handleAIServiceLogTrigger();
@@ -671,7 +792,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
         await handleCustomOption4();
     });
 
-    // 面板控制事件
+    // 控制面板逻辑
     document.getElementById('startStopBtn2').addEventListener('click', function () {
         if (running) stop();
         else start();
@@ -691,7 +812,7 @@ const systemPrompt = `你是一名专业的点餐系统客服分类助手。请�
     document.getElementById('dropdownOpt3').addEventListener('click', async () => { await handleCustomOption3(); });
     document.getElementById('dropdownOpt4').addEventListener('click', async () => { await handleCustomOption4(); });
 
-    function updateUI () {
+    function updateUI() {
         const btn = document.getElementById('startStopBtn2');
         const statusEl = document.getElementById('statusIndicator');
         if (running) {
