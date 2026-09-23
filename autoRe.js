@@ -525,87 +525,84 @@
     }
 
     // 3. 兼容双版本 DOM + 降级容错点击机制
-    let clickTarge = async (n, m) => {
+   let clickTarge = async (n, m) => {
         const ready = await autoClick();
         if (!ready) return false;
 
-        await delay(300); // 留出下拉菜单展开过渡动画
+        await delay(350); // 留出下拉菜单展开过渡动画
 
         const targeClass = 'Tabselect-muPopupContent-category-button';
 
         // === 一级分类搜寻 ===
         let firstEls = await waitForCondition(() => {
-            // 方式 A: 传统 Class
             let els = document.querySelectorAll(`.${targeClass}>span`);
             if (els && els.length > n) return els;
 
-            // 方式 B: AntDesign 展开的下拉 Popup 列表项
-            const antOptions = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item, .ant-select-item-option-content, .ant-cascader-menu-item');
+            // AntDesign 列表节点
+            const antOptions = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item, .ant-cascader-menu:first-child .ant-cascader-menu-item');
             if (antOptions && antOptions.length > n) return antOptions;
 
             return null;
         }, 2000);
-
-        // 一级分类降级策略
-        if (!firstEls) {
-            const popupContainer = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden), .Tabselect-muPopupContent, .Tabselect');
-            if (popupContainer) {
-                const fallbackEls = popupContainer.querySelectorAll('.ant-select-item, span, button, div[role="option"]');
-                if (fallbackEls && fallbackEls.length > n) {
-                    firstEls = fallbackEls;
-                    addLog(`⚠️ 一级分类启动降级检索`);
-                }
-            }
-        }
 
         if (!firstEls || !firstEls[n]) {
             addLog(`❌ 未能找到第 ${n} 个一级分类`);
             return false;
         }
 
+        // 确保元素在视口内并触发点击
+        firstEls[n].scrollIntoView?.({ block: 'nearest' });
         firstEls[n].click();
-        await delay(300);
+        await delay(400); // 增加二层级联列表渲染的等待时间
 
-        // === 二级分类搜寻 ===
+        // === 二级分类搜寻（重点强化大索引项如 11 的获取） ===
         let secondEls = await waitForCondition(() => {
-            // 方式 A: 传统 Class
+            // 方式 A: 级联菜单第二列 (AntDesign Cascader Menu 2)
+            const secondCascader = document.querySelectorAll('.ant-cascader-menu:nth-child(2) .ant-cascader-menu-item');
+            if (secondCascader && secondCascader.length > m) return secondCascader;
+
+            // 方式 B: 普通下拉框的展开项
+            const activeDropdown = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item');
+            if (activeDropdown && activeDropdown.length > m) return activeDropdown;
+
+            // 方式 C: 传统 Class
             let els = document.querySelectorAll(`.${targeClass}>span`);
             if (els && els.length > m) return els;
 
-            // 方式 B: 新版 AntDesign 展开的二级菜单
-            const antOptions = document.querySelectorAll('.ant-cascader-menu:nth-child(2) .ant-cascader-menu-item, .ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item');
-            if (antOptions && antOptions.length > m) return antOptions;
-
             return null;
-        }, 2000);
+        }, 2500);
 
-        // 二级分类降级兜底（用于修复/服务手机界面无预估 Class 渲染时）
+        // 降级搜寻：如果在级联第二列找不齐 m 项，抓取当前开启菜单内的所有可交互项
         if (!secondEls) {
-            addLog(`⚠️ 启动二级选项全域盲点点击...`);
-            const activeMenu = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden), .Tabselect-muPopupContent');
-            if (activeMenu) {
-                const validNodes = Array.from(activeMenu.querySelectorAll('.ant-select-item, span, li, div')).filter(el => el.innerText && el.innerText.trim().length > 0);
-                if (validNodes.length > m) secondEls = validNodes;
+            addLog(`⚠️ 启动二级选项全域搜寻...`);
+            const menus = document.querySelectorAll('.ant-cascader-menu, .ant-select-dropdown:not(.ant-select-dropdown-hidden)');
+            const targetMenu = menus[menus.length - 1]; // 取最新的弹层
+            if (targetMenu) {
+                const items = targetMenu.querySelectorAll('.ant-cascader-menu-item, .ant-select-item, li, div[role="option"]');
+                if (items.length > m) secondEls = items;
             }
         }
 
         if (secondEls && secondEls[m]) {
-            secondEls[m].click();
-            addLog(`✅ 成功选择第 ${m} 项二级分类`);
+            const targetEl = secondEls[m];
+
+            // 核心修复：滚动到可视区域，确保虚拟列表/长菜单完成渲染与事件绑定
+            targetEl.scrollIntoView?.({ block: 'nearest', behavior: 'instant' });
+            await delay(100);
+
+            // 深度点击：同时派发原生 MouseEvent，防止框架绑定的 click 事件失灵
+            targetEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            targetEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            targetEl.click();
+
+            addLog(`✅ 成功点击第 ${m} 项二级分类`);
         } else {
-            // 最终兜底强行尝试
-            const fallbackOption = document.querySelectorAll('.ant-select-dropdown .ant-select-item')[m];
-            if (fallbackOption) {
-                fallbackOption.click();
-                addLog(`⚡ 已执行最终兜底强行点击`);
-            } else {
-                addLog(`❌ 二级分类 ${m} 点击失败`);
-                return false;
-            }
+            addLog(`❌ 二级分类 ${m} 点击失败（未匹配到 DOM 节点）`);
+            return false;
         }
 
         await delay(200);
-        clickCoordinate(50, 50); // 收起遮罩
+        clickCoordinate(50, 50); // 关闭弹层
         return true;
     };
 
