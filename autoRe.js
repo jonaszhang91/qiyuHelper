@@ -461,25 +461,50 @@
     // =========================================================
 
     // 1. 寻找并确保“服务小记”面板处于可见状态
-    let clickLogBtn = async () => {
-        // [新版 DOM] 检查右侧抽屉/卡片中是否已包含服务小记区域
-        const newServiceNotePanel = document.querySelector('.m-websession-userInfo-serviceNote, .card-content');
-        if (newServiceNotePanel) {
-            addLog('✅ 检测到侧边栏【服务小记】面板');
-            return true;
-        }
+// 1. 精准定位并确保“服务小记”Tab 处于激活状态
+let clickLogBtn = async () => {
+    // 优先通过属性精准查找“服务小记” Tab 按钮
+    const tabSelectors = [
+        '.ant-tabs-tab[data-node-key="serviceNote"]',
+        '[id$="-tab-serviceNote"]',
+        '.ant-tabs-tab-btn[aria-controls$="-panel-serviceNote"]'
+    ];
 
-        // [旧版 DOM] 点击顶部的“服务小记”顶部 Tab 入口
-        const oldLogBtnSelector = "#subapp-container > div.m-kefu-chat > div.m-chat-pannel > div.m-chat-pannel-info > div.flex.items-center.min-h-\\[60px\\] > div.btn-wrap > span:nth-child(3)";
-        const logBtn = await waitForElement(oldLogBtnSelector, 2000);
-        if (logBtn) {
-            logBtn.click();
-            return true;
-        }
+    let targetTab = null;
+    for (const sel of tabSelectors) {
+        targetTab = document.querySelector(sel);
+        if (targetTab) break;
+    }
 
-        addLog('⚠️ 未能找到“服务小记”面板入口');
-        return false;
-    };
+    if (targetTab) {
+        // 判断当前 Tab 是否已被激活（包含 active 类名，或者内部按钮 aria-selected === "true"）
+        const isAlreadyActive = targetTab.classList.contains('ant-tabs-tab-active') ||
+                                targetTab.getAttribute('aria-selected') === 'true' ||
+                                targetTab.querySelector('[aria-selected="true"]');
+
+        if (!isAlreadyActive) {
+            // 未激活时触发点击，支持元素本身或内部 .ant-tabs-tab-btn
+            const clickTarget = targetTab.querySelector('.ant-tabs-tab-btn') || targetTab;
+            clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            clickTarget.click();
+            addLog('✅ 已切换至【服务小记】Tab');
+            await delay(300); // 等待 Tab 切换动画及面板加载
+        } else {
+            addLog('ℹ️ 【服务小记】Tab 已处于激活状态');
+        }
+        return true;
+    }
+
+    // 备用兼容逻辑：检查右侧侧边栏/卡片中是否已有直接显示的面板
+    const newServiceNotePanel = document.querySelector('.m-websession-userInfo-serviceNote, .card-content');
+    if (newServiceNotePanel) {
+        addLog('✅ 检测到侧边栏【服务小记】面板');
+        return true;
+    }
+
+    addLog('⚠️ 未能找到“服务小记” Tab 入口');
+    return false;
+};
 
     // 2. 点击展开“咨询分类”下拉框
     let clickLogTextBtn = async () => {
