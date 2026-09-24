@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         autoResForSevenFish
 // @namespace    http://tampermonkey.net/
-// @version      2026-09-23
-// @description  七鱼自动回复 + 悬浮球右键服务小记菜单（动态等待 + 双版本 DOM 兼容版）
+// @version      2026-09-24
+// @description  七鱼自动回复 + vpn
 // @author       jonas
 // @match        https://mjhlwkjnjyxgs.qiyukf.com/chat/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=qiyukf.com
@@ -867,4 +867,299 @@ let clickLogBtn = async () => {
     loadStorage();
     updateCounts();
     addLog('✅ 已就绪 ');
+})();
+(function () {
+    if (window.__MID_VPN_BADGE_INITED__) return;
+    window.__MID_VPN_BADGE_INITED__ = true;
+
+    const API_BASE = 'https://supnet.menusifu.com/vpn';
+    const PROCESSED_ATTR = 'data-vpn-processed';
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // 通用剪贴板复制工具
+    function copyText(text) {
+        if (typeof GM_setClipboard !== 'undefined') {
+            GM_setClipboard(text);
+        } else if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text);
+        } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
+    }
+
+    // 网络请求封装
+    function httpRequest(options) {
+        return new Promise((resolve) => {
+            if (typeof GM_xmlhttpRequest !== 'undefined') {
+                GM_xmlhttpRequest({
+                    ...options,
+                    onload: (res) => resolve({ status: res.status, text: res.responseText }),
+                    onerror: () => resolve({ status: 500, text: '' })
+                });
+            } else {
+                fetch(options.url, {
+                    method: options.method || 'GET',
+                    headers: options.headers,
+                    body: options.data
+                })
+                .then(async res => ({ status: res.status, text: await res.text() }))
+                .then(res => resolve(res))
+                .catch(() => resolve({ status: 500, text: '' }));
+            }
+        });
+    }
+
+    async function fetchVpnList(merchantId) {
+        const res = await httpRequest({
+            method: "GET",
+            url: `${API_BASE}/getVPNList?pageNo=1&pageSize=10&merchantId=${merchantId}`,
+            headers: { "Accept": "application/json, text/plain, */*" }
+        });
+
+        if (res.status === 200) {
+            try { return { success: true, data: JSON.parse(res.text) }; }
+            catch (e) { return { success: false }; }
+        }
+        return { success: false };
+    }
+
+    async function setVpnEnable(devId) {
+        const res = await httpRequest({
+            method: "POST",
+            url: `${API_BASE}/setVPNEnable`,
+            headers: {
+                "Content-Type": "application/json;charset=UTF-8",
+                "Accept": "application/json, text/plain, */*"
+            },
+            data: JSON.stringify({ method: "start", devId: devId })
+        });
+        return res.status === 200;
+    }
+
+    // 全局单例悬浮框管理（保证全页面同时只开一个弹框，直接挂载在 body 上）
+    let activeDetailCard = null;
+
+    function hideActiveCard() {
+        if (activeDetailCard) {
+            activeDetailCard.remove();
+            activeDetailCard = null;
+        }
+    }
+
+    // 点击页面任意地方关闭浮动框
+    document.addEventListener('click', () => hideActiveCard());
+    // 页面滚动时关闭，防止位置漂移
+    window.addEventListener('scroll', () => hideActiveCard(), true);
+
+    function buildInlineVpnBadge(mid) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'inline-vpn-wrapper';
+        wrapper.style.cssText = 'display: inline-flex; align-items: center; margin-right: 8px; vertical-align: middle; font-size: 12px; font-weight: normal;';
+
+        const badge = document.createElement('span');
+        badge.style.cssText = 'padding: 2px 8px; border-radius: 12px; background: #f5f5f5; border: 1px solid #d9d9d9; color: #666; font-size: 12px; transition: all 0.2s; user-select: none;';
+        badge.innerText = '⏳ 查询中...';
+
+        wrapper.appendChild(badge);
+
+        (async () => {
+            const res = await fetchVpnList(mid);
+
+            if (!res.success || !res.data?.pageInfo?.list?.length) {
+                badge.style.background = '#fff2f0';
+                badge.style.borderColor = '#ffccc7';
+                badge.style.color = '#ff4d4f';
+                badge.innerText = '❌ 无数据';
+                return;
+            }
+
+            const list = res.data.pageInfo.list;
+            const winDevice = list.find(i => i.system && i.system.toLowerCase().includes('windows'));
+
+            if (winDevice) {
+                badge.style.background = '#fff7e6';
+                badge.style.borderColor = '#ffd591';
+                badge.style.color = '#fa8c16';
+                badge.innerText = '橙色 [WIN系统]';
+                return;
+            }
+
+            let serverDevice = list.find(i => i.posMode === 'server');
+
+            if (!serverDevice) {
+                badge.style.background = '#f5f5f5';
+                badge.innerText = '⚪ 无Server';
+                return;
+            }
+
+            if (!serverDevice.ifOnline) {
+                badge.style.background = '#f5f5f5';
+                badge.style.color = '#8c8c8c';
+                badge.innerText = `⚪ [Server] 离线 (${serverDevice.vpnIp || '无IP'})`;
+                return;
+            }
+
+            if (!serverDevice.vpnEnable) {
+                badge.innerText = '🔄 开启 VPN 中...';
+                await setVpnEnable(serverDevice.devId);
+                await sleep(3000);
+
+                const refreshRes = await fetchVpnList(mid);
+                if (refreshRes.success && refreshRes.data?.pageInfo?.list) {
+                    const refreshed = refreshRes.data.pageInfo.list.find(i => i.devId === serverDevice.devId);
+                    if (refreshed) serverDevice = refreshed;
+                }
+            }
+
+            if (serverDevice.vpnEnable) {
+                badge.style.background = '#f6ffed';
+                badge.style.borderColor = '#b7eb8f';
+                badge.style.color = '#52c41a';
+                badge.style.cursor = 'pointer';
+                badge.innerHTML = '🟢 [Server] 在线 <span style="font-size: 10px;">▲</span>';
+
+                const version = serverDevice.posVersion || '无';
+                const vpnIp = serverDevice.vpnIp || '';
+
+                // 点击标签弹出挂载到 Body 的浮动框
+                badge.onclick = (e) => {
+                    e.stopPropagation();
+
+                    // 如果当前已打开同一个，再点一次则关闭
+                    if (activeDetailCard && activeDetailCard.__ownerBadge === badge) {
+                        hideActiveCard();
+                        return;
+                    }
+
+                    hideActiveCard(); // 关闭其他可能开启的浮框
+
+                    // 创建全新的 Body 浮动框
+                    const card = document.createElement('div');
+                    card.__ownerBadge = badge;
+                    card.style.cssText = `
+                        position: fixed;
+                        z-index: 999999;
+                        padding: 8px 12px;
+                        background: #ffffff;
+                        border: 1px solid #b7eb8f;
+                        border-radius: 6px;
+                        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+                        font-size: 12px;
+                        color: #333;
+                        line-height: 1.6;
+                        white-space: nowrap;
+                        pointer-events: auto;
+                    `;
+
+                    card.innerHTML = `
+                        <div style="color: #389e0d;"><b>版本:</b> ${version}</div>
+                        <div style="display: flex; align-items: center; margin-top: 2px; color: #389e0d;">
+                            <b>IP:</b> <span style="margin: 0 4px; font-weight: bold;">${vpnIp || '无'}</span>
+                            ${vpnIp ? `
+                                <button class="btn-copy-ip" style="margin-left: 6px; padding: 1px 6px; font-size: 11px; background: #e6f4ff; color: #0958d9; border: 1px solid #91caff; border-radius: 3px; cursor: pointer;">复制</button>
+                                <button class="btn-jump-ip" style="margin-left: 4px; padding: 1px 6px; font-size: 11px; background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; border-radius: 3px; cursor: pointer;">跳转</button>
+                            ` : ''}
+                        </div>
+                    `;
+
+                    // 防止点击浮框内部内容时触发 document 隐藏
+                    card.onclick = (event) => event.stopPropagation();
+
+                    // 绑定内部按钮事件
+                    if (vpnIp) {
+                        const btnCopy = card.querySelector('.btn-copy-ip');
+                        const btnJump = card.querySelector('.btn-jump-ip');
+
+                        if (btnCopy) {
+                            btnCopy.onclick = (event) => {
+                                event.stopPropagation();
+                                copyText(vpnIp);
+                                btnCopy.innerText = '已复制';
+                                setTimeout(() => { btnCopy.innerText = '复制'; }, 1200);
+                            };
+                        }
+
+                        if (btnJump) {
+                            btnJump.onclick = (event) => {
+                                event.stopPropagation();
+                                const url = vpnIp.startsWith('http') ? `${vpnIp}:22080` : `http://${vpnIp}:22080`;
+                                window.open(url, '_blank');
+                            };
+                        }
+                    }
+
+                    // 挂载到 body 节点
+                    document.body.appendChild(card);
+                    activeDetailCard = card;
+
+                    // 计算 badge 的绝对视口位置，将卡片准确放置在 badge 的上方
+                    const rect = badge.getBoundingClientRect();
+                    const cardRect = card.getBoundingClientRect();
+
+                    const top = rect.top - cardRect.height - 6; // 标签上方 6px
+                    const left = rect.left;
+
+                    card.style.top = `${Math.max(10, top)}px`; // 防止超出屏幕顶部
+                    card.style.left = `${left}px`;
+                };
+            } else {
+                badge.style.background = '#fff2f0';
+                badge.style.borderColor = '#ffccc7';
+                badge.style.color = '#ff4d4f';
+                badge.innerText = '🔴 [Server] 开启失败';
+            }
+        })();
+
+        return wrapper;
+    }
+
+    window.scanAndAppendMidVpnBadges = function () {
+        const xpath = "//text()[contains(., 'M000')]";
+        const result = document.evaluate(xpath, document.body, null, XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
+
+        for (let i = 0; i < result.snapshotLength; i++) {
+            const textNode = result.snapshotItem(i);
+            const parent = textNode.parentElement;
+
+            if (!parent || parent.closest('.inline-vpn-wrapper') || parent.hasAttribute(PROCESSED_ATTR)) {
+                continue;
+            }
+
+            const text = textNode.nodeValue;
+            const match = text.match(/M000[A-Za-z0-9]+/);
+
+            if (match) {
+                const mid = match[0];
+                parent.setAttribute(PROCESSED_ATTR, 'true');
+
+                const vpnBadge = buildInlineVpnBadge(mid);
+                parent.parentNode.insertBefore(vpnBadge, parent);
+            }
+        }
+    };
+
+    function initMidVpnModule() {
+        const observer = new MutationObserver(() => {
+            window.scanAndAppendMidVpnBadges();
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        window.scanAndAppendMidVpnBadges();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMidVpnModule);
+    } else {
+        initMidVpnModule();
+    }
 })();
