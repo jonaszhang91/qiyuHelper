@@ -876,7 +876,7 @@ let clickLogBtn = async () => {
     window.__MID_VPN_BADGE_INITED__ = true;
 
     // 🔗 你的本地 API 服务基地址
-    const API_BASE = 'https://tender-austin-noted-cowboy.trycloudflare.com/api/vpn';
+    const API_BASE = 'http://47.116.195.122:13218/api/vpn';
     const PROCESSED_ATTR = 'data-vpn-processed';
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
