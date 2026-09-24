@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         autoResForSevenFish
 // @namespace    http://tampermonkey.net/
-// @version      2026-09-24
-// @description  七鱼自动回复 + vpn
+// @version      2026-09-23
+// @description  七鱼自动回复 + 悬浮球右键服务小记菜单（动态等待 + 双版本 DOM 兼容版）
 // @author       jonas
 // @match        https://mjhlwkjnjyxgs.qiyukf.com/chat/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=qiyukf.com
@@ -868,11 +868,15 @@ let clickLogBtn = async () => {
     updateCounts();
     addLog('✅ 已就绪 ');
 })();
+
+
+//vpn 分装
 (function () {
     if (window.__MID_VPN_BADGE_INITED__) return;
     window.__MID_VPN_BADGE_INITED__ = true;
 
-    const API_BASE = 'https://supnet.menusifu.com/vpn';
+    // 🔗 你的本地 API 服务基地址
+    const API_BASE = 'https://tender-austin-noted-cowboy.trycloudflare.com/api/vpn';
     const PROCESSED_ATTR = 'data-vpn-processed';
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -915,34 +919,7 @@ let clickLogBtn = async () => {
         });
     }
 
-    async function fetchVpnList(merchantId) {
-        const res = await httpRequest({
-            method: "GET",
-            url: `${API_BASE}/getVPNList?pageNo=1&pageSize=10&merchantId=${merchantId}`,
-            headers: { "Accept": "application/json, text/plain, */*" }
-        });
-
-        if (res.status === 200) {
-            try { return { success: true, data: JSON.parse(res.text) }; }
-            catch (e) { return { success: false }; }
-        }
-        return { success: false };
-    }
-
-    async function setVpnEnable(devId) {
-        const res = await httpRequest({
-            method: "POST",
-            url: `${API_BASE}/setVPNEnable`,
-            headers: {
-                "Content-Type": "application/json;charset=UTF-8",
-                "Accept": "application/json, text/plain, */*"
-            },
-            data: JSON.stringify({ method: "start", devId: devId })
-        });
-        return res.status === 200;
-    }
-
-    // 全局单例悬浮框管理（保证全页面同时只开一个弹框，直接挂载在 body 上）
+    // 全局单例悬浮框管理
     let activeDetailCard = null;
 
     function hideActiveCard() {
@@ -952,9 +929,7 @@ let clickLogBtn = async () => {
         }
     }
 
-    // 点击页面任意地方关闭浮动框
     document.addEventListener('click', () => hideActiveCard());
-    // 页面滚动时关闭，防止位置漂移
     window.addEventListener('scroll', () => hideActiveCard(), true);
 
     function buildInlineVpnBadge(mid) {
@@ -968,152 +943,178 @@ let clickLogBtn = async () => {
 
         wrapper.appendChild(badge);
 
+        // 异步获取并处理状态
         (async () => {
-            const res = await fetchVpnList(mid);
+            let retryCount = 0;
+            const maxRetries = 3;
+            let targetDevice = null;
 
-            if (!res.success || !res.data?.pageInfo?.list?.length) {
-                badge.style.background = '#fff2f0';
-                badge.style.borderColor = '#ffccc7';
-                badge.style.color = '#ff4d4f';
-                badge.innerText = '❌ 无数据';
-                return;
-            }
-
-            const list = res.data.pageInfo.list;
-            const winDevice = list.find(i => i.system && i.system.toLowerCase().includes('windows'));
-
-            if (winDevice) {
-                badge.style.background = '#fff7e6';
-                badge.style.borderColor = '#ffd591';
-                badge.style.color = '#fa8c16';
-                badge.innerText = '橙色 [WIN系统]';
-                return;
-            }
-
-            let serverDevice = list.find(i => i.posMode === 'server');
-
-            if (!serverDevice) {
-                badge.style.background = '#f5f5f5';
-                badge.innerText = '⚪ 无Server';
-                return;
-            }
-
-            if (!serverDevice.ifOnline) {
-                badge.style.background = '#f5f5f5';
-                badge.style.color = '#8c8c8c';
-                badge.innerText = `⚪ [Server] 离线 (${serverDevice.vpnIp || '无IP'})`;
-                return;
-            }
-
-            if (!serverDevice.vpnEnable) {
-                badge.innerText = '🔄 开启 VPN 中...';
-                await setVpnEnable(serverDevice.devId);
-                await sleep(3000);
-
-                const refreshRes = await fetchVpnList(mid);
-                if (refreshRes.success && refreshRes.data?.pageInfo?.list) {
-                    const refreshed = refreshRes.data.pageInfo.list.find(i => i.devId === serverDevice.devId);
-                    if (refreshed) serverDevice = refreshed;
+            while (retryCount < maxRetries) {
+                if (retryCount > 0) {
+                    badge.innerText = `🔄 同步中 (${retryCount + 1}/${maxRetries})...`;
+                    await sleep(3000);
                 }
-            }
 
-            if (serverDevice.vpnEnable) {
-                badge.style.background = '#f6ffed';
-                badge.style.borderColor = '#b7eb8f';
-                badge.style.color = '#52c41a';
-                badge.style.cursor = 'pointer';
-                badge.innerHTML = '🟢 [Server] 在线 <span style="font-size: 10px;">▲</span>';
+                // 调用你的本地后端接口
+                const res = await httpRequest({
+                    method: "GET",
+                    url: `${API_BASE}/auto-enable?merchantId=${mid}`,
+                    headers: { "Accept": "application/json, text/plain, */*" }
+                });
 
-                const version = serverDevice.posVersion || '无';
-                const vpnIp = serverDevice.vpnIp || '';
+                if (res.status !== 200) {
+                    badge.style.background = '#fff2f0';
+                    badge.style.borderColor = '#ffccc7';
+                    badge.style.color = '#ff4d4f';
+                    badge.innerText = '❌ 服务异常';
+                    return;
+                }
 
-                // 点击标签弹出挂载到 Body 的浮动框
-                badge.onclick = (e) => {
-                    e.stopPropagation();
+                try {
+                    const resultJson = JSON.parse(res.text);
+                    const list = resultJson.data || [];
 
-                    // 如果当前已打开同一个，再点一次则关闭
-                    if (activeDetailCard && activeDetailCard.__ownerBadge === badge) {
-                        hideActiveCard();
+                    if (!list.length) {
+                        badge.style.background = '#fff2f0';
+                        badge.style.borderColor = '#ffccc7';
+                        badge.style.color = '#ff4d4f';
+                        badge.innerText = '❌ 无数据';
                         return;
                     }
 
-                    hideActiveCard(); // 关闭其他可能开启的浮框
-
-                    // 创建全新的 Body 浮动框
-                    const card = document.createElement('div');
-                    card.__ownerBadge = badge;
-                    card.style.cssText = `
-                        position: fixed;
-                        z-index: 999999;
-                        padding: 8px 12px;
-                        background: #ffffff;
-                        border: 1px solid #b7eb8f;
-                        border-radius: 6px;
-                        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-                        font-size: 12px;
-                        color: #333;
-                        line-height: 1.6;
-                        white-space: nowrap;
-                        pointer-events: auto;
-                    `;
-
-                    card.innerHTML = `
-                        <div style="color: #389e0d;"><b>版本:</b> ${version}</div>
-                        <div style="display: flex; align-items: center; margin-top: 2px; color: #389e0d;">
-                            <b>IP:</b> <span style="margin: 0 4px; font-weight: bold;">${vpnIp || '无'}</span>
-                            ${vpnIp ? `
-                                <button class="btn-copy-ip" style="margin-left: 6px; padding: 1px 6px; font-size: 11px; background: #e6f4ff; color: #0958d9; border: 1px solid #91caff; border-radius: 3px; cursor: pointer;">复制</button>
-                                <button class="btn-jump-ip" style="margin-left: 4px; padding: 1px 6px; font-size: 11px; background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; border-radius: 3px; cursor: pointer;">跳转</button>
-                            ` : ''}
-                        </div>
-                    `;
-
-                    // 防止点击浮框内部内容时触发 document 隐藏
-                    card.onclick = (event) => event.stopPropagation();
-
-                    // 绑定内部按钮事件
-                    if (vpnIp) {
-                        const btnCopy = card.querySelector('.btn-copy-ip');
-                        const btnJump = card.querySelector('.btn-jump-ip');
-
-                        if (btnCopy) {
-                            btnCopy.onclick = (event) => {
-                                event.stopPropagation();
-                                copyText(vpnIp);
-                                btnCopy.innerText = '已复制';
-                                setTimeout(() => { btnCopy.innerText = '复制'; }, 1200);
-                            };
-                        }
-
-                        if (btnJump) {
-                            btnJump.onclick = (event) => {
-                                event.stopPropagation();
-                                const url = vpnIp.startsWith('http') ? `${vpnIp}:22080` : `http://${vpnIp}:22080`;
-                                window.open(url, '_blank');
-                            };
-                        }
+                    // 1. 检查是否有 Windows 系统设备
+                    const winDevice = list.find(i => i.system && i.system.toLowerCase().includes('windows'));
+                    if (winDevice) {
+                        badge.style.background = '#fff7e6';
+                        badge.style.borderColor = '#ffd591';
+                        badge.style.color = '#fa8c16';
+                        badge.innerText = '橙色 [WIN系统]';
+                        return;
                     }
 
-                    // 挂载到 body 节点
-                    document.body.appendChild(card);
-                    activeDetailCard = card;
+                    // 2. 查找 Server 设备
+                    let serverDevice = list.find(i => i.posMode === 'server');
+                    if (!serverDevice) {
+                        badge.style.background = '#f5f5f5';
+                        badge.innerText = '⚪ 无Server';
+                        return;
+                    }
 
-                    // 计算 badge 的绝对视口位置，将卡片准确放置在 badge 的上方
-                    const rect = badge.getBoundingClientRect();
-                    const cardRect = card.getBoundingClientRect();
+                    // 3. 检查是否离线
+                    if (!serverDevice.ifOnline) {
+                        badge.style.background = '#f5f5f5';
+                        badge.style.color = '#8c8c8c';
+                        badge.innerText = `⚪ [Server] 离线 (${serverDevice.vpnIp || '无IP'})`;
+                        return;
+                    }
 
-                    const top = rect.top - cardRect.height - 6; // 标签上方 6px
-                    const left = rect.left;
+                    // 4. 如果在线且已经开启 (vpnEnable === true)
+                    if (serverDevice.vpnEnable) {
+                        targetDevice = serverDevice;
+                        break;
+                    }
 
-                    card.style.top = `${Math.max(10, top)}px`; // 防止超出屏幕顶部
-                    card.style.left = `${left}px`;
-                };
-            } else {
+                    // 如果在线但未开启，则继续下一次重试轮询
+                } catch (e) {
+                    // 解析错误跳过继续重试
+                }
+
+                retryCount++;
+            }
+
+            // 如果重试 3 次后依然没有成功开启
+            if (!targetDevice) {
                 badge.style.background = '#fff2f0';
                 badge.style.borderColor = '#ffccc7';
                 badge.style.color = '#ff4d4f';
                 badge.innerText = '🔴 [Server] 开启失败';
+                return;
             }
+
+            // 5. 成功在线状态渲染
+            badge.style.background = '#f6ffed';
+            badge.style.borderColor = '#b7eb8f';
+            badge.style.color = '#52c41a';
+            badge.style.cursor = 'pointer';
+            badge.innerHTML = '🟢 [Server] 在线 <span style="font-size: 10px;">▲</span>';
+
+            const version = targetDevice.posVersion || '无';
+            const vpnIp = targetDevice.vpnIp || '';
+
+            badge.onclick = (e) => {
+                e.stopPropagation();
+
+                if (activeDetailCard && activeDetailCard.__ownerBadge === badge) {
+                    hideActiveCard();
+                    return;
+                }
+
+                hideActiveCard();
+
+                const card = document.createElement('div');
+                card.__ownerBadge = badge;
+                card.style.cssText = `
+                    position: fixed;
+                    z-index: 999999;
+                    padding: 8px 12px;
+                    background: #ffffff;
+                    border: 1px solid #b7eb8f;
+                    border-radius: 6px;
+                    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+                    font-size: 12px;
+                    color: #333;
+                    line-height: 1.6;
+                    white-space: nowrap;
+                    pointer-events: auto;
+                `;
+
+                card.innerHTML = `
+                    <div style="color: #389e0d;"><b>版本:</b> ${version}</div>
+                    <div style="display: flex; align-items: center; margin-top: 2px; color: #389e0d;">
+                        <b>IP:</b> <span style="margin: 0 4px; font-weight: bold;">${vpnIp || '无'}</span>
+                        ${vpnIp ? `
+                            <button class="btn-copy-ip" style="margin-left: 6px; padding: 1px 6px; font-size: 11px; background: #e6f4ff; color: #0958d9; border: 1px solid #91caff; border-radius: 3px; cursor: pointer;">复制</button>
+                            <button class="btn-jump-ip" style="margin-left: 4px; padding: 1px 6px; font-size: 11px; background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; border-radius: 3px; cursor: pointer;">跳转</button>
+                        ` : ''}
+                    </div>
+                `;
+
+                card.onclick = (event) => event.stopPropagation();
+
+                if (vpnIp) {
+                    const btnCopy = card.querySelector('.btn-copy-ip');
+                    const btnJump = card.querySelector('.btn-jump-ip');
+
+                    if (btnCopy) {
+                        btnCopy.onclick = (event) => {
+                            event.stopPropagation();
+                            copyText(vpnIp);
+                            btnCopy.innerText = '已复制';
+                            setTimeout(() => { btnCopy.innerText = '复制'; }, 1200);
+                        };
+                    }
+
+                    if (btnJump) {
+                        btnJump.onclick = (event) => {
+                            event.stopPropagation();
+                            const url = vpnIp.startsWith('http') ? `${vpnIp}:22080` : `http://${vpnIp}:22080`;
+                            window.open(url, '_blank');
+                        };
+                    }
+                }
+
+                document.body.appendChild(card);
+                activeDetailCard = card;
+
+                const rect = badge.getBoundingClientRect();
+                const cardRect = card.getBoundingClientRect();
+
+                const top = rect.top - cardRect.height - 6;
+                const left = rect.left;
+
+                card.style.top = `${Math.max(10, top)}px`;
+                card.style.left = `${left}px`;
+            };
         })();
 
         return wrapper;
