@@ -877,7 +877,7 @@ let clickLogBtn = async () => {
 
     // 🔗 你的本地 API 服务基地址
     const API_BASE = 'http://47.116.195.122:13218/api/vpn';
-    const PROCESSED_ATTR = 'data-vpn-processed';
+    const PROCESSED_ATTR = 'data-vpn-badge-done';
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -898,26 +898,24 @@ let clickLogBtn = async () => {
     }
 
     // 网络请求封装
-    function httpRequest(options) {
-        return new Promise((resolve) => {
-            if (typeof GM_xmlhttpRequest !== 'undefined') {
-                GM_xmlhttpRequest({
-                    ...options,
-                    onload: (res) => resolve({ status: res.status, text: res.responseText }),
-                    onerror: () => resolve({ status: 500, text: '' })
-                });
-            } else {
-                fetch(options.url, {
-                    method: options.method || 'GET',
-                    headers: options.headers,
-                    body: options.data
-                })
-                .then(async res => ({ status: res.status, text: await res.text() }))
-                .then(res => resolve(res))
-                .catch(() => resolve({ status: 500, text: '' }));
-            }
+function httpRequest(options) {
+    return new Promise((resolve) => {
+        if (typeof GM_xmlhttpRequest !== 'function') {
+            console.warn('[VPN] GM_xmlhttpRequest 不可用，取消请求');
+            resolve({ status: 0, text: '' });
+            return;
+        }
+        GM_xmlhttpRequest({
+            method: options.method || 'GET',
+            url: options.url,
+            headers: options.headers || {},
+            data: options.data,
+            onload: (res) => resolve({ status: res.status, text: res.responseText }),
+            onerror: () => resolve({ status: 500, text: '' }),
+            ontimeout: () => resolve({ status: 500, text: '' })
         });
-    }
+    });
+}
 
     // 全局单例悬浮框管理
     let activeDetailCard = null;
@@ -1121,29 +1119,32 @@ let clickLogBtn = async () => {
     }
 
     window.scanAndAppendMidVpnBadges = function () {
-        const xpath = "//text()[contains(., 'M000')]";
-        const result = document.evaluate(xpath, document.body, null, XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
+    // 只处理 .info-value-notice（群公告的内容容器）
+    // 注意：不判断内容里是否含“群公告”，因为公告正文本身不一定有这几个字
+    const containers = document.querySelectorAll('.info-value-notice');
 
-        for (let i = 0; i < result.snapshotLength; i++) {
-            const textNode = result.snapshotItem(i);
-            const parent = textNode.parentElement;
+    containers.forEach((container) => {
+        // 已处理过就跳过
+        if (container.hasAttribute(PROCESSED_ATTR)) return;
 
-            if (!parent || parent.closest('.inline-vpn-wrapper') || parent.hasAttribute(PROCESSED_ATTR)) {
-                continue;
-            }
+        const text = container.textContent || '';
+        const mids = text.match(/M000[A-Za-z0-9]+/g);
 
-            const text = textNode.nodeValue;
-            const match = text.match(/M000[A-Za-z0-9]+/);
+        // 先打标记，避免 MutationObserver 反复触发导致重复扫描
+        container.setAttribute(PROCESSED_ATTR, 'true');
 
-            if (match) {
-                const mid = match[0];
-                parent.setAttribute(PROCESSED_ATTR, 'true');
+        if (!mids || !mids.length) return;
 
-                const vpnBadge = buildInlineVpnBadge(mid);
-                parent.parentNode.insertBefore(vpnBadge, parent);
-            }
-        }
-    };
+        // 去重，保持出现顺序（同一 MID 出现多次只渲染一个徽章）
+        const uniqueMids = [...new Set(mids)];
+
+        uniqueMids.forEach((mid) => {
+            const vpnBadge = buildInlineVpnBadge(mid);
+            // 插在 <div class="info-value-notice"> 前面（同级、紧邻其前）
+            container.parentNode.insertBefore(vpnBadge, container);
+        });
+    });
+};
 
     function initMidVpnModule() {
         const observer = new MutationObserver(() => {
