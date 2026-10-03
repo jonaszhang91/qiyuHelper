@@ -7,15 +7,14 @@ const path = require('path');
 const currentDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 
 // ==================== 🛠️ 核心配置项 ====================
-let APP_PATH = "";              
-let SCRIPT_NAME = "autoRe.js";   
-let DEBUG_PORT = 9222;          
+let APP_PATH = "";
+let SCRIPT_NAME = "autoRe.js";
+let DEBUG_PORT = 9222;
 
-// 🎯 【高能修改】：改回 GitHub 官方直链，并动态拼接随机参数，强制干掉所有 CDN 和系统缓存
 const getLatestUrl = () => `https://raw.githubusercontent.com/jonaszhang91/qiyuHelper/main/autoRe.js?t=${Date.now()}`;
 
 console.log("===================================================");
-console.log("      网易七鱼 自动化控制面板 启动工具 (无缓存直注版)");
+console.log("      网易七鱼 自动化控制面板 启动工具 (CDP 桥接版)");
 console.log("===================================================\n");
 
 function cleanPath(rawPath) {
@@ -27,7 +26,7 @@ function selectExeAndWriteConfigSafe(configFilePath) {
     console.log('📬 正在打开系统文件选择窗口，请直接双击选中【网易七鱼.exe】启动程序...');
     const tempPathFile = path.join(currentDir, '_temp_raw_path.txt');
     const escapedTempPathFile = tempPathFile.replace(/\\/g, '\\\\');
-    
+
     const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $FileBrowser = New-Object System.Windows.Forms.OpenFileDialog
@@ -44,7 +43,7 @@ if ($Show -eq "OK") {
     try {
         fs.writeFileSync(tempPsFile, '\ufeff' + psScript, 'utf8');
         execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tempPsFile}"`, { stdio: 'ignore' });
-        
+
         if (fs.existsSync(tempPathFile)) {
             const rawExePath = fs.readFileSync(tempPathFile, 'utf8').trim();
             if (rawExePath && fs.existsSync(rawExePath)) {
@@ -64,11 +63,10 @@ if ($Show -eq "OK") {
     }
 }
 
-// 采用官方 https 模块请求（国内直连 GitHub 如果报错，请确保开启了代理或者代理工具处于 TUN/全局 模式）
 function downloadFromGithub(url) {
     return new Promise((resolve, reject) => {
         const https = require('https');
-        const req = https.get(url, { 
+        const req = https.get(url, {
             timeout: 6000,
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         }, (res) => {
@@ -104,21 +102,116 @@ function checkPortOpen(port) {
     return new Promise((resolve) => {
         const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
             res.resume();
-            resolve(true); 
+            resolve(true);
         });
-        req.on('error', () => resolve(false)); 
+        req.on('error', () => resolve(false));
         req.setTimeout(600, () => { req.destroy(); resolve(false); });
     });
 }
 
 function launchQiyuRaw() {
     console.log(`🚀 [1/3] 正在开启远程调试并拉起网易七鱼主程序...`);
-    const cmdStr = `start "" "${APP_PATH}" --remote-debugging-port=${DEBUG_PORT}`;
+    const cmdStr = `start "" "${APP_PATH}" --remote-debugging-port=${DEBUG_PORT} --no-proxy-server`;
     exec(cmdStr, { windowsHide: false }, (err) => {
         if (err) console.error("❌ 拉起尝试失败:", err.message);
     });
 }
 
+// ==================== 🌉 CDP 桥接核心 ====================
+let activeWs = null;
+let isInjecting = false;
+let hasInjectedOnce = false;
+
+function startBridge(ws) {
+    let msgId = 1;
+    const sendCDP = (method, params) => {
+        const id = msgId++;
+        try {
+            ws.send(JSON.stringify({ id, method, params }));
+        } catch (e) {}
+        return id;
+    };
+
+    // 替页面发请求
+    const handleNodeFetch = (reqId, url) => {
+        console.log(`🔀 [桥接] ${url}`);
+        const httpsMod = require('https');
+        const httpMod = require('http');
+        const lib = url.startsWith('https') ? httpsMod : httpMod;
+
+        const reply = (status, text) => {
+            const payload = JSON.stringify({ status, text });
+            sendCDP('Runtime.evaluate', {
+                expression: `window.__nodeFetchCb && window.__nodeFetchCb(${reqId}, ${payload})`
+            });
+        };
+
+        try {
+            const req = lib.get(url, { timeout: 15000 }, (r) => {
+                let d = '';
+                r.on('data', c => d += c);
+                r.on('end', () => reply(r.statusCode, d));
+            });
+            req.on('error', (err) => {
+                console.log(`❌ [桥接失败] ${err.message}`);
+                reply(500, err.message);
+            });
+            req.on('timeout', () => {
+                req.destroy();
+                console.log(`⏱️ [桥接超时] ${url}`);
+                reply(500, 'timeout');
+            });
+        } catch (e) {
+            reply(500, e.message);
+        }
+    };
+
+    // 监听页面的绑定调用
+    ws.on('message', (msg) => {
+        try {
+            const m = JSON.parse(msg);
+            if (m.method === 'Runtime.bindingCalled' && m.params.name === '__nodeFetch') {
+                const { reqId, url } = JSON.parse(m.params.payload);
+                handleNodeFetch(reqId, url);
+            }
+        } catch (e) {}
+    });
+
+    ws.on('open', () => {
+        console.log("🔗 [2/3] 通道已连通，正在注入脚本并注册桥接...");
+
+        // 1. 注册 binding
+        sendCDP('Runtime.addBinding', { name: '__nodeFetch' });
+
+        // 2. 注入业务脚本
+        setTimeout(() => {
+            sendCDP('Runtime.evaluate', { expression: injectCode });
+            console.log("✅ [3/3] 注入完成！CDP 桥接已激活，保持运行中...");
+            console.log("💡 请勿关闭本窗口，桥接需常驻才能工作\n");
+            hasInjectedOnce = true;
+            isInjecting = false;
+        }, 400);
+    });
+
+    ws.on('close', () => {
+        console.log("⚠️ WebSocket 连接断开");
+        if (activeWs === ws) {
+            activeWs = null;
+            // 只有在成功注入过之后才自动重连（页面刷新/切换会触发 close）
+            if (hasInjectedOnce && !isInjecting) {
+                console.log("🔄 尝试重新连接并注入...");
+                setTimeout(() => tryInject(), 1500);
+            }
+        }
+    });
+
+    ws.on('error', (err) => {
+        console.log(`❌ WebSocket 错误: ${err.message}`);
+        // close 事件会自动处理
+    });
+}
+
+// ==================== 启动器主逻辑 ====================
 async function startLauncher() {
     const configPath = path.join(currentDir, 'config.json');
 
@@ -134,7 +227,7 @@ async function startLauncher() {
 
     try {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        APP_PATH = cleanPath(config.qiyu_path); 
+        APP_PATH = cleanPath(config.qiyu_path);
         if (config.script_name) SCRIPT_NAME = config.script_name;
         if (config.debug_port) DEBUG_PORT = config.debug_port;
         console.log("⚙️  [成功] 已加载外部 config.json 配置文件");
@@ -145,31 +238,38 @@ async function startLauncher() {
         return;
     }
 
-    // ----------- 🌟 2. 实时无缓存云端同步 -----------
-    let injectCode = "";
+    // ----------- 2. 实时无缓存云端同步 -----------
+    let injectCodeLocal = "";
     const scriptPath = path.join(currentDir, SCRIPT_NAME);
-    
-    // 如果本地有，先读作备用
-    if (fs.existsSync(scriptPath)) injectCode = fs.readFileSync(scriptPath, 'utf8');
+
+    if (fs.existsSync(scriptPath)) injectCodeLocal = fs.readFileSync(scriptPath, 'utf8');
 
     const realTimeUrl = getLatestUrl();
     console.log('🌐 正在绕过缓存，穿透下载 GitHub 最新实时源码...');
     try {
         const cloudCode = await downloadFromGithub(realTimeUrl);
         if (cloudCode && cloudCode.trim().length > 0) {
-            // 只要云端能拿到，100% 强行刷入覆盖本地，不再做等同判断
             fs.writeFileSync(scriptPath, cloudCode, 'utf8');
-            injectCode = cloudCode;
+            injectCodeLocal = cloudCode;
             console.log('📥 [成功] 已强行同步并覆盖本地核心代码为 GitHub 实时最新版！');
         }
     } catch (error) {
         console.warn('⚠️  [提示] 穿透联网下载受阻（已自动切为纯本地离线保护模式）');
-        if (!injectCode) {
+        if (!injectCodeLocal) {
             console.error(`\n🚨 [严重错误] 首次运行或本地无脚本时，必须联网下载核心！`);
             setTimeout(() => process.exit(1), 8000);
             return;
         }
     }
+
+    // 把注入代码挂到全局，供 startBridge 使用
+    global.injectCode = injectCodeLocal;
+    // 用一个 getter 让 startBridge 能访问
+    Object.defineProperty(global, 'injectCode', {
+        value: injectCodeLocal,
+        writable: false,
+        configurable: false
+    });
 
     // ----------- 3. 智能多态判定 -----------
     console.log('\n🔍 正在进行系统进程自检...');
@@ -183,79 +283,63 @@ async function startLauncher() {
         } else {
             console.log('♻️  [接管] 发现运行中的七鱼未开启调试通道。正在强制清空并重新接管启动...');
             killQiyuProcesses();
-            await new Promise(resolve => setTimeout(resolve, 1500)); 
+            await new Promise(resolve => setTimeout(resolve, 1500));
             launchQiyuRaw();
         }
     } else {
         launchQiyuRaw();
     }
 
-    // ----------- 4. 通道建立与盲发无感注入 -----------
+    // ----------- 4. 通道建立与注入 -----------
     let retryCount = 0;
-    
-    function tryInject() {
+
+    global.tryInject = function tryInject() {
+        if (isInjecting || activeWs) return; // 已有一个连接在跑，不重复
+        isInjecting = true;
+
         http.get(`http://127.0.0.1:${DEBUG_PORT}/json`, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
                     const targets = JSON.parse(data);
-                    const anyPage = targets.find(t => t.type === 'page' && (t.url.includes('qiyukf.com') || t.title.includes('会话'))) 
+                    const anyPage = targets.find(t => t.type === 'page' && (t.url.includes('qiyukf.com') || t.title.includes('会话')))
                                     || targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
-                    
+
                     if (!anyPage || !anyPage.webSocketDebuggerUrl) {
                         throw new Error("未找到有效渲染窗口");
                     }
 
-                    console.log("🔗 [2/3] 通道已连通，正在往七鱼内核传输代码...");
-                    
                     const WebSocket = require('ws');
-                    const ws = new WebSocket(anyPage.webSocketDebuggerUrl);
-
-                    const doSend = () => {
-                        ws.send(JSON.stringify({
-                            id: 1,
-                            method: 'Runtime.evaluate',
-                            params: { expression: injectCode }
-                        }));
-                        
-                        console.log("✅ [3/3] 自动化控制面板已成功无感嵌入七鱼窗口！");
-                        
-                        setTimeout(() => {
-                            try { ws.close(); } catch(e){}
-                            console.log("\n👋 任务全部完成，助手即将安全退出。");
-                            setTimeout(() => { process.exit(0); }, 1000);
-                        }, 800);
-                    };
-
-                    ws.on('open', doSend);
-                    ws.onconnect = doSend;
-
-                    ws.on('error', () => { 
-                        try { ws.close(); } catch(e){}
-                        reconnect(); 
+                    const ws = new WebSocket(anyPage.webSocketDebuggerUrl, {
+                        // 关闭 permessage-deflate 避免某些兼容问题
+                        perMessageDeflate: false
                     });
+                    activeWs = ws;
+                    startBridge(ws);
 
                 } catch (err) {
+                    isInjecting = false;
                     reconnect();
                 }
             });
         }).on('error', () => {
+            isInjecting = false;
             reconnect();
         });
-    }
+    };
 
     function reconnect() {
+        if (activeWs) return; // 有活连接就不重连
         retryCount++;
         if (retryCount > 60) {
             console.error("\n❌ [错误] 智能拉起接管超时！请完全退出右下角托盘的七鱼后再试。");
-            setTimeout(() => process.exit(1), 5000);
             return;
         }
-        setTimeout(tryInject, 600); 
+        setTimeout(() => global.tryInject(), 600);
     }
 
-    setTimeout(tryInject, 3000); 
+    setTimeout(() => global.tryInject(), 3000);
 }
 
 startLauncher();
