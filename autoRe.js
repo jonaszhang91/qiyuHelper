@@ -898,23 +898,45 @@ let clickLogBtn = async () => {
     }
 
     // 网络请求封装
-function httpRequest(options) {
-    return new Promise((resolve) => {
-        if (typeof window.__nodeFetch === 'function') {
-            const reqId = ++__bridgeReqId;
-            __bridgePending[reqId] = resolve;
-            setTimeout(() => {
-                if (__bridgePending[reqId]) {
+ function httpRequest(options) {
+        return new Promise((resolve) => {
+            // 优先走 CDP 桥接
+            if (typeof window.__nodeFetch === 'function') {
+                const reqId = ++__bridgeReqId;
+                __bridgePending[reqId] = resolve;
+
+                // 超时保护
+                setTimeout(() => {
+                    if (__bridgePending[reqId]) {
+                        delete __bridgePending[reqId];
+                        resolve({ status: 500, text: 'bridge timeout' });
+                    }
+                }, 15000);
+
+                try {
+                    window.__nodeFetch(JSON.stringify({ reqId, url: options.url }));
+                } catch (e) {
                     delete __bridgePending[reqId];
-                    resolve({ status: 500, text: 'bridge timeout' });
+                    resolve({ status: 500, text: 'bridge call failed: ' + e.message });
                 }
-            }, 15000);
-            window.__nodeFetch(JSON.stringify({ reqId, url: options.url }));
-            return;
-        }
-        // 降级...
-    });
-}
+                return;
+            }
+
+            // 降级：原生 fetch（会被 Mixed Content 拦，仅保底）
+            console.warn('[VPN] CDP 桥接不可用，降级到 fetch');
+            fetch(options.url, {
+                method: options.method || 'GET',
+                headers: options.headers || {}
+            })
+            .then(async (res) => {
+                const text = await res.text();
+                resolve({ status: res.status, text });
+            })
+            .catch((err) => {
+                resolve({ status: 500, text: err.message });
+            });
+        });
+    }
 
     // 全局单例悬浮框管理
     let activeDetailCard = null;
