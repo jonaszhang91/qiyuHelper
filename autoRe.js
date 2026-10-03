@@ -900,18 +900,19 @@ let clickLogBtn = async () => {
     // 网络请求封装
 function httpRequest(options) {
     return new Promise((resolve) => {
-        fetch(options.url, {
-            method: options.method || 'GET',
-            headers: options.headers || {}
-        })
-        .then(async (res) => {
-            const text = await res.text();
-            resolve({ status: res.status, text });
-        })
-        .catch((err) => {
-            console.warn('[VPN] fetch 失败:', err);
-            resolve({ status: 500, text: '' });
-        });
+        if (typeof window.__nodeFetch === 'function') {
+            const reqId = ++__bridgeReqId;
+            __bridgePending[reqId] = resolve;
+            setTimeout(() => {
+                if (__bridgePending[reqId]) {
+                    delete __bridgePending[reqId];
+                    resolve({ status: 500, text: 'bridge timeout' });
+                }
+            }, 15000);
+            window.__nodeFetch(JSON.stringify({ reqId, url: options.url }));
+            return;
+        }
+        // 降级...
     });
 }
 
