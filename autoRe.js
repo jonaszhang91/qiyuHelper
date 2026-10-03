@@ -876,7 +876,7 @@ let clickLogBtn = async () => {
     window.__MID_VPN_BADGE_INITED__ = true;
 
     // 🔗 你的本地 API 服务基地址
-    const API_BASE = 'http://47.116.195.122:13218/api/vpn';
+    const API_BASE = 'https://api.emohaha.com/api/vpn';
     const PROCESSED_ATTR = 'data-vpn-badge-done';
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -900,19 +900,17 @@ let clickLogBtn = async () => {
     // 网络请求封装
 function httpRequest(options) {
     return new Promise((resolve) => {
-        if (typeof GM_xmlhttpRequest !== 'function') {
-            console.warn('[VPN] GM_xmlhttpRequest 不可用，取消请求');
-            resolve({ status: 0, text: '' });
-            return;
-        }
-        GM_xmlhttpRequest({
+        fetch(options.url, {
             method: options.method || 'GET',
-            url: options.url,
-            headers: options.headers || {},
-            data: options.data,
-            onload: (res) => resolve({ status: res.status, text: res.responseText }),
-            onerror: () => resolve({ status: 500, text: '' }),
-            ontimeout: () => resolve({ status: 500, text: '' })
+            headers: options.headers || {}
+        })
+        .then(async (res) => {
+            const text = await res.text();
+            resolve({ status: res.status, text });
+        })
+        .catch((err) => {
+            console.warn('[VPN] fetch 失败:', err);
+            resolve({ status: 500, text: '' });
         });
     });
 }
