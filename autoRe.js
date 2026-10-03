@@ -1139,46 +1139,46 @@ let clickLogBtn = async () => {
         return wrapper;
     }
 
-    window.scanAndAppendMidVpnBadges = function () {
-    // 只处理 .info-value-notice（群公告的内容容器）
-    // 注意：不判断内容里是否含“群公告”，因为公告正文本身不一定有这几个字
+window.scanAndAppendMidVpnBadges = function () {
     const containers = document.querySelectorAll('.info-value-notice');
 
     containers.forEach((container) => {
-        // 已处理过就跳过
         if (container.hasAttribute(PROCESSED_ATTR)) return;
 
         const text = container.textContent || '';
         const mids = text.match(/M000[A-Za-z0-9]+/g);
 
-        // 先打标记，避免 MutationObserver 反复触发导致重复扫描
-        container.setAttribute(PROCESSED_ATTR, 'true');
-
+        // 没找到 MID 就不打标记，等下次再扫
         if (!mids || !mids.length) return;
 
-        // 去重，保持出现顺序（同一 MID 出现多次只渲染一个徽章）
+        container.setAttribute(PROCESSED_ATTR, 'true');
+
         const uniqueMids = [...new Set(mids)];
 
         uniqueMids.forEach((mid) => {
             const vpnBadge = buildInlineVpnBadge(mid);
-            // 插在 <div class="info-value-notice"> 前面（同级、紧邻其前）
             container.parentNode.insertBefore(vpnBadge, container);
         });
     });
 };
 
-    function initMidVpnModule() {
-        const observer = new MutationObserver(() => {
-            window.scanAndAppendMidVpnBadges();
-        });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-
+function initMidVpnModule() {
+    const observer = new MutationObserver(() => {
         window.scanAndAppendMidVpnBadges();
-    }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    window.scanAndAppendMidVpnBadges();
+
+    // 定时补扫，避免漏掉
+    setInterval(() => {
+        window.scanAndAppendMidVpnBadges();
+    }, 3000);
+}
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initMidVpnModule);
