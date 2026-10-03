@@ -881,6 +881,18 @@ let clickLogBtn = async () => {
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+    // ========== CDP 桥接：接收启动器回传的结果 ==========
+    let __bridgeReqId = 0;
+    const __bridgePending = {};
+
+    window.__nodeFetchCb = (reqId, result) => {
+        const resolver = __bridgePending[reqId];
+        if (resolver) {
+            resolver(result);
+            delete __bridgePending[reqId];
+        }
+    };
+
     // 通用剪贴板复制工具
     function copyText(text) {
         if (typeof GM_setClipboard !== 'undefined') {
@@ -897,8 +909,8 @@ let clickLogBtn = async () => {
         }
     }
 
-    // 网络请求封装
- function httpRequest(options) {
+    // 网络请求封装（CDP 桥接版）
+    function httpRequest(options) {
         return new Promise((resolve) => {
             // 优先走 CDP 桥接
             if (typeof window.__nodeFetch === 'function') {
@@ -922,7 +934,7 @@ let clickLogBtn = async () => {
                 return;
             }
 
-            // 降级：原生 fetch（会被 Mixed Content 拦，仅保底）
+            // 降级：原生 fetch（会被 Mixed Content / CORS 拦，仅保底）
             console.warn('[VPN] CDP 桥接不可用，降级到 fetch');
             fetch(options.url, {
                 method: options.method || 'GET',
@@ -985,7 +997,7 @@ let clickLogBtn = async () => {
                     badge.style.background = '#fff2f0';
                     badge.style.borderColor = '#ffccc7';
                     badge.style.color = '#ff4d4f';
-                    badge.innerText = '❌ 服务异常';
+                    badge.innerText = `❌ 服务异常(${res.status})`;
                     return;
                 }
 
@@ -1139,46 +1151,51 @@ let clickLogBtn = async () => {
         return wrapper;
     }
 
-window.scanAndAppendMidVpnBadges = function () {
-    const containers = document.querySelectorAll('.info-value-notice');
+    window.scanAndAppendMidVpnBadges = function () {
+        // 只处理 .info-value-notice（群公告的内容容器）
+        const containers = document.querySelectorAll('.info-value-notice');
 
-    containers.forEach((container) => {
-        if (container.hasAttribute(PROCESSED_ATTR)) return;
+        containers.forEach((container) => {
+            // 已处理过就跳过
+            if (container.hasAttribute(PROCESSED_ATTR)) return;
 
-        const text = container.textContent || '';
-        const mids = text.match(/M000[A-Za-z0-9]+/g);
+            const text = container.textContent || '';
+            const mids = text.match(/M000[A-Za-z0-9]+/g);
 
-        // 没找到 MID 就不打标记，等下次再扫
-        if (!mids || !mids.length) return;
+            // ⭐ 关键：没找到 MID 就不打标记，等下次 MutationObserver 或定时器再扫
+            if (!mids || !mids.length) return;
 
-        container.setAttribute(PROCESSED_ATTR, 'true');
+            // 只有真正扫到 MID 了才打标记
+            container.setAttribute(PROCESSED_ATTR, 'true');
 
-        const uniqueMids = [...new Set(mids)];
+            // 去重，保持出现顺序
+            const uniqueMids = [...new Set(mids)];
 
-        uniqueMids.forEach((mid) => {
-            const vpnBadge = buildInlineVpnBadge(mid);
-            container.parentNode.insertBefore(vpnBadge, container);
+            uniqueMids.forEach((mid) => {
+                const vpnBadge = buildInlineVpnBadge(mid);
+                // 插在 <div class="info-value-notice"> 前面（同级、紧邻其前）
+                container.parentNode.insertBefore(vpnBadge, container);
+            });
         });
-    });
-};
+    };
 
-function initMidVpnModule() {
-    const observer = new MutationObserver(() => {
+    function initMidVpnModule() {
+        const observer = new MutationObserver(() => {
+            window.scanAndAppendMidVpnBadges();
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
         window.scanAndAppendMidVpnBadges();
-    });
 
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-
-    window.scanAndAppendMidVpnBadges();
-
-    // 定时补扫，避免漏掉
-    setInterval(() => {
-        window.scanAndAppendMidVpnBadges();
-    }, 3000);
-}
+        // ⭐ 定时补扫，防止 MutationObserver 漏触发
+        setInterval(() => {
+            window.scanAndAppendMidVpnBadges();
+        }, 3000);
+    }
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initMidVpnModule);
